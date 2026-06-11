@@ -15,6 +15,30 @@
     body { margin: 0; background: #0a1628; }
     ::-webkit-scrollbar { height: 6px; width: 6px; }
     ::-webkit-scrollbar-thumb { background: #1e3a5f; border-radius: 99px; }
+
+    @keyframes cartBump { 0%{transform:scale(1)} 35%{transform:scale(1.5)} 70%{transform:scale(.85)} 100%{transform:scale(1)} }
+    .cart-bump { animation: cartBump .45s ease; }
+
+    @keyframes flyUp { 0%{transform:translateY(0) scale(1);opacity:1} 100%{transform:translateY(-34px) scale(1.4);opacity:0} }
+    .fly-up { animation: flyUp .7s ease forwards; }
+
+    @keyframes stepIn { from{opacity:0;transform:translateX(18px)} to{opacity:1;transform:translateX(0)} }
+    .step-in { animation: stepIn .28s ease; }
+
+    @keyframes ringPulse { 0%{transform:scale(.4);opacity:.55} 80%{opacity:0} 100%{transform:scale(2.6);opacity:0} }
+    .ring-pulse { animation: ringPulse 1.1s ease-out forwards; }
+
+    @keyframes checkPop { 0%{transform:scale(0) rotate(-25deg)} 55%{transform:scale(1.25) rotate(6deg)} 100%{transform:scale(1) rotate(0)} }
+    .check-pop { animation: checkPop .6s cubic-bezier(.18,.9,.32,1.3) forwards; }
+
+    @keyframes drawCheck { to { stroke-dashoffset: 0; } }
+    .draw-check { stroke-dasharray: 40; stroke-dashoffset: 40; animation: drawCheck .5s .28s ease forwards; }
+
+    @keyframes titlePop { 0%{opacity:0;transform:translateY(12px) scale(.9)} 100%{opacity:1;transform:translateY(0) scale(1)} }
+    .title-pop { animation: titlePop .5s .35s ease both; }
+
+    @keyframes confFall { 0%{transform:translateY(-12vh) rotate(0);opacity:1} 100%{transform:translateY(86vh) rotate(720deg);opacity:0} }
+    .conf { position:absolute; top:0; width:10px; height:14px; border-radius:2px; animation: confFall linear forwards; }
   </style>
 </head>
 <body>
@@ -195,6 +219,12 @@
       const [soloOfertas, setSoloOfertas] = useState(false);
       const [carrito, setCarrito] = useState({});
       const [carritoAbierto, setCarritoAbierto] = useState(false);
+      const [paso, setPaso] = useState("carrito");   // carrito | revisar | exito
+      const [cliNom, setCliNom] = useState("");
+      const [cliTel, setCliTel] = useState("");
+      const [cliDir, setCliDir] = useState("");
+      const [enviando, setEnviando] = useState(false);
+      const [bump, setBump] = useState(0);            // dispara la animación del carrito
       const [slide, setSlide] = useState(0);
 
       // Admin
@@ -256,7 +286,7 @@
         return arr;
       }, [productos, cat, busqueda, orden, soloOfertas]);
 
-      const agregar = (id) => setCarrito((c) => ({ ...c, [id]: (c[id] || 0) + 1 }));
+      const agregar = (id) => { setCarrito((c) => ({ ...c, [id]: (c[id] || 0) + 1 })); setBump((b) => b + 1); };
       const quitar = (id) => setCarrito((c) => { const n = (c[id] || 0) - 1; const cp = { ...c }; if (n <= 0) delete cp[id]; else cp[id] = n; return cp; });
       const eliminar = (id) => setCarrito((c) => { const cp = { ...c }; delete cp[id]; return cp; });
       const vaciar = () => setCarrito({});
@@ -267,11 +297,48 @@
       const faltaEnvio = Math.max(0, cfg.envioGratisDesde - totalPesos);
       const progresoEnvio = Math.min(100, (totalPesos / cfg.envioGratisDesde) * 100);
 
-      const finalizar = () => {
-        const lineas = itemsCarrito.map((i) => `• ${i.qty}x ${i.nombre} — ${fmt(i.precio * i.qty)}`).join("\n");
-        const msg = `Hola! Quiero hacer este pedido:\n\n${lineas}\n\nTotal: ${fmt(totalPesos)}`;
-        window.open(`https://wa.me/${cfg.whatsapp}?text=${encodeURIComponent(msg)}`, "_blank");
+      // Inserta el pedido en backup_pedidos (sección Backup Pedidos de tu app)
+      const confirmarPedido = async () => {
+        if (!empresa) return;
+        if (!cliNom.trim()) { alert("Poné tu nombre para confirmar el pedido."); return; }
+        setEnviando(true);
+        try {
+          const itemsBackup = itemsCarrito.map((i) => ({
+            id: i.codigo || String(i.id),
+            n: i.nombre, c: i.qty, p: i.precio, sub: i.precio * i.qty, dsc: null,
+          }));
+          const obsParts = ["📱 Pedido por tienda online"];
+          if (cliTel.trim()) obsParts.push("Tel: " + cliTel.trim());
+          if (cliDir.trim()) obsParts.push(cliDir.trim());
+          const body = {
+            empresa_id: empresa.id,
+            fecha: new Date().toISOString(),
+            cliente_nom: cliNom.trim().slice(0, 200),
+            cliente_id: "",
+            obs: obsParts.join(" · ").slice(0, 500),
+            items: itemsBackup,
+            total: totalPesos,
+            total_con_iva: Math.round(totalPesos * 1.21 * 100) / 100,
+            tipo: "pedido",
+            usuario: "tienda",
+            usuario_nom: "Tienda Online",
+          };
+          const r = await fetch(`${SB_URL}/rest/v1/backup_pedidos`, {
+            method: "POST",
+            headers: { ...SB_HDR, "Content-Type": "application/json", "Prefer": "return=representation" },
+            body: JSON.stringify(body),
+          });
+          if (!r.ok) throw new Error(await r.text());
+          setPaso("exito");
+        } catch (e) {
+          console.error("Pedido:", e.message);
+          alert("❌ No se pudo enviar el pedido: " + e.message);
+        } finally { setEnviando(false); }
       };
+
+      // Cierra el carrito y resetea todo el flujo
+      const cerrarCarrito = () => { setCarritoAbierto(false); setTimeout(() => setPaso("carrito"), 200); };
+      const nuevoPedido = () => { setCarrito({}); setCliNom(""); setCliTel(""); setCliDir(""); setPaso("carrito"); setCarritoAbierto(false); };
 
       /* ---- Admin ---- */
       const abrirAdmin = () => { if (adminOk) { setEditCfg(JSON.parse(JSON.stringify(cfg))); setEditorOpen(true); } else { setLoginOpen(true); setLoginErr(""); } };
@@ -328,7 +395,7 @@
               </button>
               <button onClick={() => setCarritoAbierto(true)} className="relative shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>
                 <ShoppingCart size={20} />
-                {totalUnidades > 0 && <span className="absolute -top-1.5 -right-1.5 text-[11px] font-bold w-5 h-5 rounded-full flex items-center justify-center" style={{ background: TEMA.oferta, color: "#fff" }}>{totalUnidades}</span>}
+                {totalUnidades > 0 && <span key={bump} className="cart-bump absolute -top-1.5 -right-1.5 text-[11px] font-bold w-5 h-5 rounded-full flex items-center justify-center" style={{ background: TEMA.oferta, color: "#fff" }}>{totalUnidades}</span>}
               </button>
             </div>
           </header>
@@ -451,47 +518,142 @@
             )}
           </main>
 
-          {/* DRAWER CARRITO */}
-          {carritoAbierto && (
-            <div className="fixed inset-0 z-40 flex justify-end">
-              <div className="absolute inset-0" style={{ background: "#00000088" }} onClick={() => setCarritoAbierto(false)} />
-              <aside className="relative w-full max-w-sm h-full flex flex-col shadow-2xl" style={{ background: TEMA.bg, borderLeft: `1px solid ${TEMA.borde}` }}>
-                <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: `1px solid ${TEMA.borde}` }}>
-                  <h2 style={{ fontFamily: "'Syne', sans-serif" }} className="font-extrabold text-lg">Tu pedido</h2>
-                  <button onClick={() => setCarritoAbierto(false)} className="p-1"><X size={22} /></button>
+          {/* CARRITO / CHECKOUT */}
+          {carritoAbierto && paso === "exito" && (
+            <div className="fixed inset-0 z-50 overflow-hidden flex flex-col items-center justify-center px-6" style={{ background: TEMA.bg }}>
+              {/* Confetti */}
+              {Array.from({ length: 44 }).map((_, i) => {
+                const cols = [TEMA.gold, TEMA.ok, TEMA.oferta, "#ffffff", "#5aa9e6", TEMA.goldSoft];
+                const st = {
+                  left: Math.random() * 100 + "%",
+                  background: cols[i % cols.length],
+                  animationDuration: (1.6 + Math.random() * 1.4).toFixed(2) + "s",
+                  animationDelay: (Math.random() * 0.5).toFixed(2) + "s",
+                  width: (7 + Math.random() * 6).toFixed(0) + "px",
+                  height: (10 + Math.random() * 8).toFixed(0) + "px",
+                };
+                return <span key={i} className="conf" style={st} />;
+              })}
+
+              {/* Check + anillo */}
+              <div className="relative flex items-center justify-center mb-6" style={{ width: 120, height: 120 }}>
+                <span className="ring-pulse absolute rounded-full" style={{ width: 120, height: 120, background: TEMA.ok }} />
+                <span className="ring-pulse absolute rounded-full" style={{ width: 120, height: 120, background: TEMA.ok, animationDelay: ".25s" }} />
+                <div className="check-pop relative rounded-full flex items-center justify-center" style={{ width: 96, height: 96, background: TEMA.ok }}>
+                  <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="#06281a" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path className="draw-check" d="M5 12.5l4.5 4.5L19 7" />
+                  </svg>
                 </div>
-                <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-                  {itemsCarrito.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center gap-2" style={{ color: TEMA.textoSuave }}><Store size={40} /><p className="text-sm">Tu carrito está vacío</p></div>
-                  ) : itemsCarrito.map((i) => (
-                    <div key={i.id} className="flex items-center gap-3 rounded-xl p-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
-                      <div className="w-12 h-12 rounded-lg flex items-center justify-center overflow-hidden shrink-0" style={{ background: TEMA.bgSoft }}>{i.foto ? <img src={i.foto} alt="" className="w-full h-full object-contain" /> : <span className="text-2xl">{emojiCat(i.cat)}</span>}</div>
-                      <div className="flex-1 min-w-0"><div className="text-sm font-medium truncate">{i.nombre}</div><div style={{ color: TEMA.gold }} className="text-sm font-bold">{fmt(i.precio * i.qty)}</div></div>
-                      <div className="flex items-center gap-1.5">
-                        <button onClick={() => quitar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Minus size={14} /></button>
-                        <span className="text-sm font-bold w-5 text-center">{i.qty}</span>
-                        <button onClick={() => agregar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Plus size={14} /></button>
-                        <button onClick={() => eliminar(i.id)} className="p-1 ml-1"><Trash2 size={15} style={{ color: TEMA.oferta }} /></button>
+              </div>
+
+              <h2 className="title-pop text-center text-3xl font-extrabold mb-2" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.texto }}>¡Pedido realizado! 🎉</h2>
+              <p className="title-pop text-center text-sm mb-1" style={{ color: TEMA.textoSuave }}>Tu pedido fue enviado y ya quedó registrado.</p>
+              <p className="title-pop text-center text-sm mb-6" style={{ color: TEMA.textoSuave }}>Te vamos a contactar para coordinar la entrega.</p>
+              <div className="title-pop rounded-2xl px-6 py-4 mb-8 text-center" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+                <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>{totalUnidades} productos · Total</div>
+                <div className="text-3xl font-extrabold" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }}>{fmt(totalPesos)}</div>
+              </div>
+              <button onClick={nuevoPedido} className="title-pop w-full max-w-xs py-3.5 rounded-xl font-bold transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>Seguir comprando</button>
+            </div>
+          )}
+
+          {carritoAbierto && paso !== "exito" && (
+            <div className="fixed inset-0 z-40 flex justify-end">
+              <div className="absolute inset-0" style={{ background: "#00000088" }} onClick={cerrarCarrito} />
+              <aside className="relative w-full max-w-sm h-full flex flex-col shadow-2xl" style={{ background: TEMA.bg, borderLeft: `1px solid ${TEMA.borde}` }}>
+                {/* Header con stepper */}
+                <div className="px-4 py-3" style={{ borderBottom: `1px solid ${TEMA.borde}` }}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {paso === "revisar" && <button onClick={() => setPaso("carrito")} className="p-1 -ml-1"><ChevronLeft size={20} /></button>}
+                      <h2 style={{ fontFamily: "'Syne', sans-serif" }} className="font-extrabold text-lg">{paso === "carrito" ? "Tu pedido" : "Confirmar pedido"}</h2>
+                    </div>
+                    <button onClick={cerrarCarrito} className="p-1"><X size={22} /></button>
+                  </div>
+                  {/* Indicador de pasos */}
+                  <div className="flex items-center gap-1.5 mt-2">
+                    {["carrito", "revisar"].map((p, idx) => (
+                      <div key={p} className="flex-1 h-1 rounded-full transition-all" style={{ background: (paso === "carrito" ? 0 : 1) >= idx ? TEMA.gold : TEMA.bgSoft }} />
+                    ))}
+                  </div>
+                </div>
+
+                {/* PASO 1: CARRITO */}
+                {paso === "carrito" && (
+                  <>
+                    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 step-in">
+                      {itemsCarrito.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center gap-2" style={{ color: TEMA.textoSuave }}><Store size={40} /><p className="text-sm">Tu carrito está vacío</p></div>
+                      ) : itemsCarrito.map((i) => (
+                        <div key={i.id} className="flex items-center gap-3 rounded-xl p-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+                          <div className="w-12 h-12 rounded-lg flex items-center justify-center overflow-hidden shrink-0" style={{ background: TEMA.bgSoft }}>{i.foto ? <img src={i.foto} alt="" className="w-full h-full object-contain" /> : <span className="text-2xl">{emojiCat(i.cat)}</span>}</div>
+                          <div className="flex-1 min-w-0"><div className="text-sm font-medium truncate">{i.nombre}</div><div style={{ color: TEMA.gold }} className="text-sm font-bold">{fmt(i.precio * i.qty)}</div></div>
+                          <div className="flex items-center gap-1.5">
+                            <button onClick={() => quitar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Minus size={14} /></button>
+                            <span className="text-sm font-bold w-5 text-center">{i.qty}</span>
+                            <button onClick={() => agregar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Plus size={14} /></button>
+                            <button onClick={() => eliminar(i.id)} className="p-1 ml-1"><Trash2 size={15} style={{ color: TEMA.oferta }} /></button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {itemsCarrito.length > 0 && (
+                      <div className="px-4 py-3 space-y-3" style={{ borderTop: `1px solid ${TEMA.borde}` }}>
+                        <div>
+                          <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>{faltaEnvio > 0 ? `Te faltan ${fmt(faltaEnvio)} para el envío gratis` : "🎉 ¡Tenés envío gratis!"}</div>
+                          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: TEMA.bgSoft }}><div className="h-full rounded-full transition-all" style={{ width: `${progresoEnvio}%`, background: TEMA.ok }} /></div>
+                        </div>
+                        <div className="flex items-center justify-between"><span style={{ color: TEMA.textoSuave }}>Total</span><span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-2xl font-extrabold">{fmt(totalPesos)}</span></div>
+                        <div className="flex gap-2">
+                          <button onClick={vaciar} className="px-3 py-3 rounded-xl text-sm font-medium" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.textoSuave }}>Vaciar</button>
+                          <button onClick={() => setPaso("revisar")} className="flex-1 py-3 rounded-xl font-bold transition active:scale-95 flex items-center justify-center gap-1" style={{ background: TEMA.gold, color: TEMA.bg }}>Ver pedido final <ChevronRight size={18} /></button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* PASO 2: REVISAR + DATOS */}
+                {paso === "revisar" && (
+                  <>
+                    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4 step-in">
+                      {/* Resumen */}
+                      <div>
+                        <div className="text-xs font-bold mb-2" style={{ color: TEMA.gold }}>Resumen del pedido</div>
+                        <div className="rounded-xl divide-y" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, borderColor: TEMA.borde }}>
+                          {itemsCarrito.map((i) => (
+                            <div key={i.id} className="flex items-center justify-between px-3 py-2" style={{ borderColor: TEMA.borde }}>
+                              <span className="text-sm truncate mr-2"><span style={{ color: TEMA.gold }} className="font-bold">{i.qty}×</span> {i.nombre}</span>
+                              <span className="text-sm font-medium shrink-0">{fmt(i.precio * i.qty)}</span>
+                            </div>
+                          ))}
+                          <div className="flex items-center justify-between px-3 py-2.5">
+                            <span className="font-bold">Total</span>
+                            <span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-xl font-extrabold">{fmt(totalPesos)}</span>
+                          </div>
+                        </div>
+                      </div>
+                      {/* Datos del cliente */}
+                      <div>
+                        <div className="text-xs font-bold mb-2" style={{ color: TEMA.gold }}>Tus datos</div>
+                        <div className="space-y-2">
+                          <input value={cliNom} onChange={(e) => setCliNom(e.target.value)} placeholder="Nombre / comercio *" className={inputCls} style={inputStyle} />
+                          <input value={cliTel} onChange={(e) => setCliTel(e.target.value)} placeholder="Teléfono" inputMode="tel" className={inputCls} style={inputStyle} />
+                          <textarea value={cliDir} onChange={(e) => setCliDir(e.target.value)} placeholder="Dirección / nota (opcional)" rows={2} className={inputCls} style={inputStyle} />
+                        </div>
                       </div>
                     </div>
-                  ))}
-                </div>
-                {itemsCarrito.length > 0 && (
-                  <div className="px-4 py-3 space-y-3" style={{ borderTop: `1px solid ${TEMA.borde}` }}>
-                    <div>
-                      <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>{faltaEnvio > 0 ? `Te faltan ${fmt(faltaEnvio)} para el envío gratis` : "🎉 ¡Tenés envío gratis!"}</div>
-                      <div className="h-1.5 rounded-full overflow-hidden" style={{ background: TEMA.bgSoft }}><div className="h-full rounded-full transition-all" style={{ width: `${progresoEnvio}%`, background: TEMA.ok }} /></div>
+                    <div className="px-4 py-3" style={{ borderTop: `1px solid ${TEMA.borde}` }}>
+                      <button onClick={confirmarPedido} disabled={enviando} className="w-full py-3.5 rounded-xl font-bold transition active:scale-95 flex items-center justify-center gap-2" style={{ background: TEMA.gold, color: TEMA.bg, opacity: enviando ? .6 : 1 }}>
+                        {enviando ? "Enviando…" : <>Confirmar pedido · {fmt(totalPesos)}</>}
+                      </button>
                     </div>
-                    <div className="flex items-center justify-between"><span style={{ color: TEMA.textoSuave }}>Total</span><span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-2xl font-extrabold">{fmt(totalPesos)}</span></div>
-                    <div className="flex gap-2">
-                      <button onClick={vaciar} className="px-3 py-3 rounded-xl text-sm font-medium" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.textoSuave }}>Vaciar</button>
-                      <button onClick={finalizar} className="flex-1 py-3 rounded-xl font-bold transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>Finalizar pedido</button>
-                    </div>
-                  </div>
+                  </>
                 )}
               </aside>
             </div>
           )}
+
 
           {/* MODAL LOGIN ADMIN */}
           {loginOpen && (
