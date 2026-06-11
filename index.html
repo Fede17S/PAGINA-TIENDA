@@ -39,6 +39,15 @@
 
     @keyframes confFall { 0%{transform:translateY(-12vh) rotate(0);opacity:1} 100%{transform:translateY(86vh) rotate(720deg);opacity:0} }
     .conf { position:absolute; top:0; width:10px; height:14px; border-radius:2px; animation: confFall linear forwards; }
+
+    @keyframes splashIn { from{opacity:0;transform:scale(.85)} to{opacity:1;transform:scale(1)} }
+    .splash-in { animation: splashIn .5s cubic-bezier(.18,.9,.32,1.2) both; }
+    @keyframes softFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+    .soft-float { animation: softFloat 2.4s ease-in-out infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { border-radius:50%; border:3px solid #1e3a5f; border-top-color:#c9933a; animation: spin .8s linear infinite; }
+    @keyframes barGrow { 0%{width:8%} 50%{width:70%} 100%{width:96%} }
+    .bar-grow { animation: barGrow 1.4s ease-in-out infinite alternate; }
   </style>
 </head>
 <body>
@@ -225,6 +234,8 @@
       const [cliDir, setCliDir] = useState("");
       const [enviando, setEnviando] = useState(false);
       const [bump, setBump] = useState(0);            // dispara la animación del carrito
+      const [splashVisible, setSplashVisible] = useState(true);
+      const [splashFade, setSplashFade] = useState(false);
       const [slide, setSlide] = useState(0);
 
       // Admin
@@ -262,6 +273,15 @@
         const t = setInterval(() => setSlide((s) => (s + 1) % (cfg.banners.length || 1)), 5000);
         return () => clearInterval(t);
       }, [cfg.banners.length]);
+
+      // Splash: cuando termina de cargar, deja ver el logo un instante y hace fade
+      useEffect(() => {
+        if (!cargando) {
+          const t1 = setTimeout(() => setSplashFade(true), 650);
+          const t2 = setTimeout(() => setSplashVisible(false), 1200);
+          return () => { clearTimeout(t1); clearTimeout(t2); };
+        }
+      }, [cargando]);
 
       const nombreTienda = cfg.nombre || empresa?.nombre || "Mi Tienda";
       const logoEmpresa = empresa?.logo || "";
@@ -375,6 +395,28 @@
 
       return (
         <div style={{ background: TEMA.bg, color: TEMA.texto, fontFamily: "'DM Sans', sans-serif" }} className="min-h-screen w-full">
+          {/* SPLASH / PANTALLA DE CARGA */}
+          {splashVisible && (
+            <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center transition-opacity duration-500"
+              style={{ background: TEMA.bg, opacity: splashFade ? 0 : 1, pointerEvents: splashFade ? "none" : "auto" }}>
+              <div className="soft-float flex items-center justify-center mb-5">
+                {empresa?.logo ? (
+                  <img key="logo" src={empresa.logo} alt="logo" className="splash-in w-24 h-24 rounded-2xl object-cover" style={{ boxShadow: "0 8px 40px #00000066" }} />
+                ) : (
+                  <div className="splash-in w-24 h-24 rounded-2xl flex items-center justify-center text-5xl" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>🛒</div>
+                )}
+              </div>
+              {empresa?.nombre && (
+                <div key={empresa.nombre} className="splash-in font-extrabold text-xl mb-1" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }}>{empresa.nombre}</div>
+              )}
+              <div className="text-xs mb-6" style={{ color: TEMA.textoSuave }}>{empresa ? "Abriendo la tienda…" : "Cargando…"}</div>
+              {/* indicador minimalista */}
+              <div className="h-1 w-36 rounded-full overflow-hidden" style={{ background: TEMA.bgSoft }}>
+                <div className="bar-grow h-full rounded-full" style={{ background: TEMA.gold }} />
+              </div>
+            </div>
+          )}
+
           {/* HEADER */}
           <header className="sticky top-0 z-30 backdrop-blur" style={{ background: TEMA.bg + "e6", borderBottom: `1px solid ${TEMA.borde}` }}>
             <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
