@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tienda</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    body { margin: 0; background: #0a1628; }
+    ::-webkit-scrollbar { height: 6px; width: 6px; }
+    ::-webkit-scrollbar-thumb { background: #1e3a5f; border-radius: 99px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useMemo } = React;
+
+    /* ============================================================
+       1) CONFIGURACIÓN  — editá desde acá
+       ============================================================ */
+    const TIENDA = {
+      nombre: "Mi Tienda",          // se reemplaza por el nombre real de tu empresa
+      tagline: "Catálogo online",
+      logo: "🛒",
+      whatsapp: "5492804000000",
+      envioGratisDesde: 50000,
+    };
+
+    // Código de empresa: se toma de la URL (?emp=CODIGO).
+    // Si abrís el archivo sin ese parámetro, usa este de respaldo:
+    const EMP_CODIGO_DEFAULT = "";   // 👈 poné acá tu código de empresa (ej "1122")
+
+    // Qué lista de precios mostrar: "clientes", "patagonia",
+    // o una lista_key de tu jsonb "precios".
+    const LISTA_PRECIO = "clientes";
+
+    /* Paleta de marca */
+    const TEMA = {
+      bg: "#0a1628", bgCard: "#0f1f38", bgSoft: "#13294b", borde: "#1e3a5f",
+      gold: "#c9933a", goldSoft: "#e0b35e", texto: "#e8eef7", textoSuave: "#9bb0cc",
+      oferta: "#e8543f", ok: "#3fbf7f",
+    };
+
+    /* Banners / promos (slider) */
+    const BANNERS = [
+      { titulo: "Ofertas de la semana", subtitulo: "Aprovechá los precios promocionales", cta: "Ver promos", grad: "linear-gradient(120deg, #1a3a5c 0%, #0a1628 60%)", emoji: "🏷️" },
+      { titulo: "Envío gratis", subtitulo: `En compras desde $${TIENDA.envioGratisDesde.toLocaleString("es-AR")}`, cta: "Empezar", grad: "linear-gradient(120deg, #3a2a10 0%, #0a1628 60%)", emoji: "🚚" },
+      { titulo: "Catálogo completo", subtitulo: "Todos nuestros productos en un solo lugar", cta: "Explorar", grad: "linear-gradient(120deg, #102b22 0%, #0a1628 60%)", emoji: "📦" },
+    ];
+
+    /* ============================================================
+       2) CONEXIÓN A SUPABASE (REST, igual que tu app de pedidos)
+       ============================================================ */
+    const SB_URL = "https://vhoswhyixqtomgqudigj.supabase.co";
+    const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZob3N3aHlpeHF0b21ncXVkaWdqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MTI4ODIsImV4cCI6MjA5NTM4ODg4Mn0.gjUaVJ1RvF3KrjfXVyh8wYIso4QW6RtIfFRbkd0PyA8";
+    const SB_HDR = { apikey: SB_KEY, Authorization: "Bearer " + SB_KEY };
+
+    async function sbGet(table, params) {
+      const r = await fetch(`${SB_URL}/rest/v1/${table}?${params}`, { headers: SB_HDR });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
+
+    // Resuelve el código de empresa -> datos de la empresa (incluye UUID)
+    async function resolverEmpresa(codigo) {
+      const emps = await sbGet("empresas",
+        `select=id,codigo,nombre,logo,color,appname&codigo=eq.${encodeURIComponent(codigo)}`);
+      return emps && emps[0] ? emps[0] : null;
+    }
+
+    function precioDeLista(p) {
+      if (LISTA_PRECIO === "patagonia") return p.precio_patagonia || p.precio_clientes || 0;
+      if (LISTA_PRECIO === "clientes")  return p.precio_clientes || 0;
+      return (p.precios && p.precios[LISTA_PRECIO]) || p.precio_clientes || 0;
+    }
+
+    function mapProducto(p) {
+      const promo = (p.precio_promo && p.precio_promo > 0)
+        ? { precio: p.precio_promo, cant: p.cant_promo || 0 } : null;
+      return {
+        id: p.id,
+        codigo: p.codigo || "",
+        nombre: p.nombre || "Sin nombre",
+        cat: p.categoria || "Sin categoría",
+        precio: precioDeLista(p),
+        foto: p.foto || "",
+        promo,
+      };
+    }
+
+    // Trae los productos reales de la empresa
+    async function fetchProductos(empId) {
+      const rows = await sbGet("productos",
+        "select=id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo" +
+        `&empresa_id=eq.${empId}&order=nombre.asc`);
+      return (rows || []).map(mapProducto);
+    }
+
+    /* Emoji de respaldo por categoría (cuando el producto no tiene foto) */
+    const emojiCat = (nombre) => {
+      const n = (nombre || "").toLowerCase();
+      if (/bebida|gaseosa|agua|cerveza|vino|jugo/.test(n)) return "🥤";
+      if (/limpie|deterg|lavand/.test(n)) return "🧼";
+      if (/lacteo|leche|queso|yogur/.test(n)) return "🧀";
+      if (/snack|galleti|papa|golosi|chocolate/.test(n)) return "🍪";
+      if (/almac|fideo|arroz|aceite|yerba|azuc|harina|conserva/.test(n)) return "🥫";
+      if (/bazar|hogar|vaso|cocina/.test(n)) return "🍽️";
+      if (/pila|electr/.test(n)) return "🔋";
+      if (/perfu|higien|cosme/.test(n)) return "🧴";
+      return "📦";
+    };
+
+    /* ============================================================
+       Helpers
+       ============================================================ */
+    const fmt = (n) => "$" + Math.round(n || 0).toLocaleString("es-AR", { minimumFractionDigits: 0 });
+
+    /* ============================================================
+       Iconos (SVG inline, estilo lucide)
+       ============================================================ */
+    const mkIcon = (paths) => ({ size = 24, style, className, fill = "none" }) =>
+      <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke="currentColor"
+        strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}
+        className={className} dangerouslySetInnerHTML={{ __html: paths }} />;
+
+    const ShoppingCart = mkIcon('<circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/>');
+    const Search = mkIcon('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>');
+    const Plus = mkIcon('<path d="M5 12h14"/><path d="M12 5v14"/>');
+    const Minus = mkIcon('<path d="M5 12h14"/>');
+    const Trash2 = mkIcon('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>');
+    const X = mkIcon('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>');
+    const Tag = mkIcon('<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>');
+    const Truck = mkIcon('<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>');
+    const ShieldCheck = mkIcon('<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>');
+    const Clock = mkIcon('<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>');
+    const ChevronLeft = mkIcon('<path d="m15 18-6-6 6-6"/>');
+    const ChevronRight = mkIcon('<path d="m9 18 6-6-6-6"/>');
+    const SlidersHorizontal = mkIcon('<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>');
+    const PackageX = mkIcon('<path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l2-1.15"/><polyline points="3.29 7 12 12 20.71 7"/><line x1="12" x2="12" y1="22" y2="12"/><path d="m17 13 5 5m0-5-5 5"/>');
+    const Store = mkIcon('<path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"/><path d="M2 7h20"/>');
+    const AlertCircle = mkIcon('<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>');
+
+    /* ============================================================
+       COMPONENTE PRINCIPAL
+       ============================================================ */
+    function Tienda() {
+      const [empresa, setEmpresa] = useState(null);
+      const [productos, setProductos] = useState([]);
+      const [cargando, setCargando] = useState(true);
+      const [aviso, setAviso] = useState("");      // mensaje de error/estado
+      const [cat, setCat] = useState("todos");
+      const [busqueda, setBusqueda] = useState("");
+      const [orden, setOrden] = useState("relevancia");
+      const [soloOfertas, setSoloOfertas] = useState(false);
+      const [carrito, setCarrito] = useState({});
+      const [carritoAbierto, setCarritoAbierto] = useState(false);
+      const [slide, setSlide] = useState(0);
+
+      // Carga inicial: resolver empresa por código y traer productos
+      useEffect(() => {
+        (async () => {
+          try {
+            const params = new URLSearchParams(window.location.search);
+            const codigo = params.get("emp") || EMP_CODIGO_DEFAULT;
+            if (!codigo) {
+              setAviso("Falta el código de empresa. Abrí la página con ?emp=TUCODIGO en la URL, o cargá EMP_CODIGO_DEFAULT en el archivo.");
+              setCargando(false);
+              return;
+            }
+            const emp = await resolverEmpresa(codigo);
+            if (!emp) {
+              setAviso(`No se encontró la empresa con código "${codigo}".`);
+              setCargando(false);
+              return;
+            }
+            setEmpresa(emp);
+            const prods = await fetchProductos(emp.id);
+            setProductos(prods);
+            if (!prods.length) setAviso("La empresa no tiene productos cargados todavía.");
+          } catch (e) {
+            console.error("Supabase:", e.message);
+            setAviso("Error al conectar con la base: " + e.message);
+          } finally {
+            setCargando(false);
+          }
+        })();
+      }, []);
+
+      useEffect(() => {
+        const t = setInterval(() => setSlide((s) => (s + 1) % BANNERS.length), 5000);
+        return () => clearInterval(t);
+      }, []);
+
+      // Branding de la empresa
+      const nombreTienda = empresa?.nombre || TIENDA.nombre;
+      const logoEmpresa = empresa?.logo || "";
+
+      // Categorías dinámicas desde los productos
+      const categorias = useMemo(() => {
+        const set = [];
+        productos.forEach((p) => { if (!set.includes(p.cat)) set.push(p.cat); });
+        set.sort((a, b) => a.localeCompare(b));
+        return ["todos", ...set];
+      }, [productos]);
+
+      const visibles = useMemo(() => {
+        let arr = productos.filter((p) => {
+          const okCat = cat === "todos" || p.cat === cat;
+          const okBusq = p.nombre.toLowerCase().includes(busqueda.toLowerCase()) ||
+                         (p.codigo || "").toLowerCase().includes(busqueda.toLowerCase());
+          const okOferta = !soloOfertas || p.promo;
+          return okCat && okBusq && okOferta;
+        });
+        if (orden === "precio-asc") arr = [...arr].sort((a, b) => a.precio - b.precio);
+        if (orden === "precio-desc") arr = [...arr].sort((a, b) => b.precio - a.precio);
+        if (orden === "nombre") arr = [...arr].sort((a, b) => a.nombre.localeCompare(b.nombre));
+        return arr;
+      }, [productos, cat, busqueda, orden, soloOfertas]);
+
+      const agregar = (id) => setCarrito((c) => ({ ...c, [id]: (c[id] || 0) + 1 }));
+      const quitar = (id) => setCarrito((c) => {
+        const n = (c[id] || 0) - 1; const copia = { ...c };
+        if (n <= 0) delete copia[id]; else copia[id] = n; return copia;
+      });
+      const eliminar = (id) => setCarrito((c) => { const copia = { ...c }; delete copia[id]; return copia; });
+      const vaciar = () => setCarrito({});
+
+      const itemsCarrito = Object.entries(carrito).map(([id, qty]) => ({
+        ...productos.find((p) => String(p.id) === String(id)), qty,
+      })).filter((i) => i.id !== undefined);
+      const totalUnidades = itemsCarrito.reduce((a, i) => a + i.qty, 0);
+      const totalPesos = itemsCarrito.reduce((a, i) => a + i.precio * i.qty, 0);
+      const faltaEnvio = Math.max(0, TIENDA.envioGratisDesde - totalPesos);
+      const progresoEnvio = Math.min(100, (totalPesos / TIENDA.envioGratisDesde) * 100);
+
+      const finalizar = () => {
+        const lineas = itemsCarrito.map((i) => `• ${i.qty}x ${i.nombre} — ${fmt(i.precio * i.qty)}`).join("\n");
+        const msg = `Hola! Quiero hacer este pedido:\n\n${lineas}\n\nTotal: ${fmt(totalPesos)}`;
+        window.open(`https://wa.me/${TIENDA.whatsapp}?text=${encodeURIComponent(msg)}`, "_blank");
+      };
+
+      return (
+        <div style={{ background: TEMA.bg, color: TEMA.texto, fontFamily: "'DM Sans', sans-serif" }} className="min-h-screen w-full">
+          {/* HEADER */}
+          <header className="sticky top-0 z-30 backdrop-blur" style={{ background: TEMA.bg + "e6", borderBottom: `1px solid ${TEMA.borde}` }}>
+            <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+              <div className="flex items-center gap-2 shrink-0">
+                {logoEmpresa
+                  ? <img src={logoEmpresa} alt="logo" className="w-9 h-9 rounded-lg object-cover" />
+                  : <span className="text-2xl">{TIENDA.logo}</span>}
+                <div className="leading-tight">
+                  <div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="font-extrabold text-lg">{nombreTienda}</div>
+                  <div style={{ color: TEMA.textoSuave }} className="text-[11px] hidden sm:block">{TIENDA.tagline}</div>
+                </div>
+              </div>
+              <div className="flex-1 relative">
+                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: TEMA.textoSuave }} />
+                <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar productos…"
+                  className="w-full pl-10 pr-3 py-2 rounded-xl text-sm outline-none"
+                  style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.texto }} />
+              </div>
+              <button onClick={() => setCarritoAbierto(true)} className="relative shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>
+                <ShoppingCart size={20} />
+                {totalUnidades > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 text-[11px] font-bold w-5 h-5 rounded-full flex items-center justify-center" style={{ background: TEMA.oferta, color: "#fff" }}>{totalUnidades}</span>
+                )}
+              </button>
+            </div>
+          </header>
+
+          <main className="max-w-6xl mx-auto px-4 pb-24">
+            {/* BANNER / SLIDER */}
+            <section className="mt-4 relative rounded-2xl overflow-hidden" style={{ height: 200 }}>
+              {BANNERS.map((b, i) => (
+                <div key={i} className="absolute inset-0 transition-opacity duration-700 flex items-center"
+                  style={{ background: b.grad, opacity: i === slide ? 1 : 0, pointerEvents: i === slide ? "auto" : "none" }}>
+                  <div className="px-6 sm:px-10 max-w-md">
+                    <div className="text-4xl mb-2">{b.emoji}</div>
+                    <h2 style={{ fontFamily: "'Syne', sans-serif" }} className="text-2xl sm:text-3xl font-extrabold mb-1">{b.titulo}</h2>
+                    <p style={{ color: TEMA.textoSuave }} className="text-sm mb-3">{b.subtitulo}</p>
+                    <button className="px-4 py-2 rounded-lg text-sm font-bold transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>{b.cta}</button>
+                  </div>
+                </div>
+              ))}
+              <button onClick={() => setSlide((s) => (s - 1 + BANNERS.length) % BANNERS.length)} className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full" style={{ background: "#00000055" }}><ChevronLeft size={18} /></button>
+              <button onClick={() => setSlide((s) => (s + 1) % BANNERS.length)} className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full" style={{ background: "#00000055" }}><ChevronRight size={18} /></button>
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
+                {BANNERS.map((_, i) => (
+                  <button key={i} onClick={() => setSlide(i)} className="h-1.5 rounded-full transition-all" style={{ width: i === slide ? 20 : 6, background: i === slide ? TEMA.gold : TEMA.textoSuave }} />
+                ))}
+              </div>
+            </section>
+
+            {/* BENEFICIOS */}
+            <section className="mt-4 grid grid-cols-3 gap-2">
+              {[
+                { icon: Truck, t: "Envío gratis", s: `Desde ${fmt(TIENDA.envioGratisDesde)}` },
+                { icon: ShieldCheck, t: "Compra segura", s: "Pago protegido" },
+                { icon: Clock, t: "Entrega 24/48h", s: "En toda la zona" },
+              ].map((b, i) => (
+                <div key={i} className="rounded-xl p-3 flex items-center gap-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+                  <b.icon size={20} style={{ color: TEMA.gold }} className="shrink-0" />
+                  <div className="leading-tight min-w-0">
+                    <div className="text-xs font-bold truncate">{b.t}</div>
+                    <div style={{ color: TEMA.textoSuave }} className="text-[11px] truncate">{b.s}</div>
+                  </div>
+                </div>
+              ))}
+            </section>
+
+            {/* AVISO (modo sin empresa / error / sin productos) */}
+            {aviso && (
+              <div className="mt-4 rounded-xl p-3 flex items-start gap-2 text-sm" style={{ background: "#2a1410", border: `1px solid ${TEMA.oferta}` }}>
+                <AlertCircle size={18} style={{ color: TEMA.oferta }} className="shrink-0 mt-0.5" />
+                <span>{aviso}</span>
+              </div>
+            )}
+
+            {/* CATEGORÍAS */}
+            {categorias.length > 1 && (
+              <section className="mt-5 flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+                {categorias.map((c) => {
+                  const activa = cat === c;
+                  const label = c === "todos" ? "Todos" : c;
+                  const emo = c === "todos" ? "🏬" : emojiCat(c);
+                  return (
+                    <button key={c} onClick={() => setCat(c)}
+                      className="shrink-0 px-3.5 py-2 rounded-full text-sm font-medium transition active:scale-95 flex items-center gap-1.5"
+                      style={{ background: activa ? TEMA.gold : TEMA.bgCard, color: activa ? TEMA.bg : TEMA.texto, border: `1px solid ${activa ? TEMA.gold : TEMA.borde}` }}>
+                      <span>{emo}</span>{label}
+                    </button>
+                  );
+                })}
+              </section>
+            )}
+
+            {/* FILTROS */}
+            <section className="mt-4 flex items-center justify-between gap-3 flex-wrap">
+              <button onClick={() => setSoloOfertas((v) => !v)}
+                className="px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 transition active:scale-95"
+                style={{ background: soloOfertas ? TEMA.oferta : TEMA.bgCard, color: soloOfertas ? "#fff" : TEMA.texto, border: `1px solid ${soloOfertas ? TEMA.oferta : TEMA.borde}` }}>
+                <Tag size={15} /> Solo promos
+              </button>
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal size={15} style={{ color: TEMA.textoSuave }} />
+                <select value={orden} onChange={(e) => setOrden(e.target.value)} className="text-sm rounded-lg px-2 py-1.5 outline-none"
+                  style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.texto }}>
+                  <option value="relevancia">Relevancia</option>
+                  <option value="precio-asc">Menor precio</option>
+                  <option value="precio-desc">Mayor precio</option>
+                  <option value="nombre">Nombre A-Z</option>
+                </select>
+              </div>
+            </section>
+
+            {/* GRID */}
+            {cargando ? (
+              <div className="mt-10 text-center" style={{ color: TEMA.textoSuave }}>Cargando productos…</div>
+            ) : visibles.length === 0 ? (
+              <div className="mt-12 text-center flex flex-col items-center gap-2" style={{ color: TEMA.textoSuave }}>
+                <PackageX size={40} /><p>No hay productos para mostrar.</p>
+              </div>
+            ) : (
+              <section className="mt-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {visibles.map((p) => {
+                  const enCarrito = carrito[p.id] || 0;
+                  return (
+                    <div key={p.id} className="rounded-2xl overflow-hidden flex flex-col transition hover:-translate-y-0.5" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+                      <div className="relative h-28 flex items-center justify-center" style={{ background: TEMA.bgSoft }}>
+                        {p.foto
+                          ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain p-1" loading="lazy" />
+                          : <span className="text-5xl">{emojiCat(p.cat)}</span>}
+                        {p.promo && (
+                          <span className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: TEMA.oferta, color: "#fff" }}>PROMO</span>
+                        )}
+                      </div>
+                      <div className="p-3 flex flex-col flex-1">
+                        <h3 className="text-sm font-medium leading-snug mb-1 line-clamp-2">{p.nombre}</h3>
+                        <div className="mt-auto">
+                          <div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-lg font-extrabold">{fmt(p.precio)}</div>
+                          {p.promo && (
+                            <div className="text-[11px]" style={{ color: TEMA.ok }}>
+                              {fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}
+                            </div>
+                          )}
+                        </div>
+                        {enCarrito === 0 ? (
+                          <button onClick={() => agregar(p.id)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>
+                            <Plus size={16} /> Agregar
+                          </button>
+                        ) : (
+                          <div className="mt-2 w-full py-1 rounded-lg flex items-center justify-between" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }}>
+                            <button onClick={() => quitar(p.id)} className="px-3 py-1"><Minus size={16} style={{ color: TEMA.gold }} /></button>
+                            <span className="font-bold text-sm">{enCarrito}</span>
+                            <button onClick={() => agregar(p.id)} className="px-3 py-1"><Plus size={16} style={{ color: TEMA.gold }} /></button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </section>
+            )}
+          </main>
+
+          {/* DRAWER CARRITO */}
+          {carritoAbierto && (
+            <div className="fixed inset-0 z-40 flex justify-end">
+              <div className="absolute inset-0" style={{ background: "#00000088" }} onClick={() => setCarritoAbierto(false)} />
+              <aside className="relative w-full max-w-sm h-full flex flex-col shadow-2xl" style={{ background: TEMA.bg, borderLeft: `1px solid ${TEMA.borde}` }}>
+                <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: `1px solid ${TEMA.borde}` }}>
+                  <h2 style={{ fontFamily: "'Syne', sans-serif" }} className="font-extrabold text-lg">Tu pedido</h2>
+                  <button onClick={() => setCarritoAbierto(false)} className="p-1"><X size={22} /></button>
+                </div>
+                <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+                  {itemsCarrito.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center gap-2" style={{ color: TEMA.textoSuave }}>
+                      <Store size={40} /><p className="text-sm">Tu carrito está vacío</p>
+                    </div>
+                  ) : (
+                    itemsCarrito.map((i) => (
+                      <div key={i.id} className="flex items-center gap-3 rounded-xl p-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+                        <div className="w-12 h-12 rounded-lg flex items-center justify-center overflow-hidden shrink-0" style={{ background: TEMA.bgSoft }}>
+                          {i.foto ? <img src={i.foto} alt="" className="w-full h-full object-contain" /> : <span className="text-2xl">{emojiCat(i.cat)}</span>}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium truncate">{i.nombre}</div>
+                          <div style={{ color: TEMA.gold }} className="text-sm font-bold">{fmt(i.precio * i.qty)}</div>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button onClick={() => quitar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Minus size={14} /></button>
+                          <span className="text-sm font-bold w-5 text-center">{i.qty}</span>
+                          <button onClick={() => agregar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Plus size={14} /></button>
+                          <button onClick={() => eliminar(i.id)} className="p-1 ml-1"><Trash2 size={15} style={{ color: TEMA.oferta }} /></button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                {itemsCarrito.length > 0 && (
+                  <div className="px-4 py-3 space-y-3" style={{ borderTop: `1px solid ${TEMA.borde}` }}>
+                    <div>
+                      <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>
+                        {faltaEnvio > 0 ? `Te faltan ${fmt(faltaEnvio)} para el envío gratis` : "🎉 ¡Tenés envío gratis!"}
+                      </div>
+                      <div className="h-1.5 rounded-full overflow-hidden" style={{ background: TEMA.bgSoft }}>
+                        <div className="h-full rounded-full transition-all" style={{ width: `${progresoEnvio}%`, background: TEMA.ok }} />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span style={{ color: TEMA.textoSuave }}>Total</span>
+                      <span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-2xl font-extrabold">{fmt(totalPesos)}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={vaciar} className="px-3 py-3 rounded-xl text-sm font-medium" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.textoSuave }}>Vaciar</button>
+                      <button onClick={finalizar} className="flex-1 py-3 rounded-xl font-bold transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>Finalizar pedido</button>
+                    </div>
+                  </div>
+                )}
+              </aside>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<Tienda />);
+  </script>
+</body>
+</html>
