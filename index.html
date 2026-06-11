@@ -24,40 +24,43 @@
     const { useState, useEffect, useMemo } = React;
 
     /* ============================================================
-       1) CONFIGURACIÓN  — editá desde acá
+       CONFIGURACIÓN BASE  (defaults; el admin de cada empresa los pisa)
        ============================================================ */
-    const TIENDA = {
-      nombre: "Mi Tienda",          // se reemplaza por el nombre real de tu empresa
-      tagline: "Catálogo online",
-      logo: "🛒",
-      whatsapp: "5492804000000",
-      envioGratisDesde: 50000,
-    };
+    const EMP_CODIGO_DEFAULT = "";          // respaldo si no hay ?emp= en la URL
+    const LISTA_PRECIO = "clientes";        // "clientes" | "patagonia" | lista_key del jsonb
 
-    // Código de empresa: se toma de la URL (?emp=CODIGO).
-    // Si abrís el archivo sin ese parámetro, usa este de respaldo:
-    const EMP_CODIGO_DEFAULT = "";   // 👈 poné acá tu código de empresa (ej "1122")
-
-    // Qué lista de precios mostrar: "clientes", "patagonia",
-    // o una lista_key de tu jsonb "precios".
-    const LISTA_PRECIO = "clientes";
-
-    /* Paleta de marca */
     const TEMA = {
       bg: "#0a1628", bgCard: "#0f1f38", bgSoft: "#13294b", borde: "#1e3a5f",
       gold: "#c9933a", goldSoft: "#e0b35e", texto: "#e8eef7", textoSuave: "#9bb0cc",
       oferta: "#e8543f", ok: "#3fbf7f",
     };
 
-    /* Banners / promos (slider) */
-    const BANNERS = [
-      { titulo: "Ofertas de la semana", subtitulo: "Aprovechá los precios promocionales", cta: "Ver promos", grad: "linear-gradient(120deg, #1a3a5c 0%, #0a1628 60%)", emoji: "🏷️" },
-      { titulo: "Envío gratis", subtitulo: `En compras desde $${TIENDA.envioGratisDesde.toLocaleString("es-AR")}`, cta: "Empezar", grad: "linear-gradient(120deg, #3a2a10 0%, #0a1628 60%)", emoji: "🚚" },
-      { titulo: "Catálogo completo", subtitulo: "Todos nuestros productos en un solo lugar", cta: "Explorar", grad: "linear-gradient(120deg, #102b22 0%, #0a1628 60%)", emoji: "📦" },
+    // Config visual por defecto (se completa/pisa con lo que guarde el admin)
+    const CFG_DEFAULT = {
+      nombre: "",                 // vacío => usa el nombre de la empresa
+      tagline: "Catálogo online",
+      whatsapp: "5492804000000",
+      envioGratisDesde: 50000,
+      beneficios: [
+        { icon: "truck",  t: "Envío gratis",     s: "Desde $50.000" },
+        { icon: "shield", t: "Compra segura",    s: "Pago protegido" },
+        { icon: "clock",  t: "Entrega 24/48h",   s: "En toda la zona" },
+      ],
+      banners: [
+        { emoji: "🏷️", titulo: "Ofertas de la semana", subtitulo: "Aprovechá los precios promocionales", cta: "Ver promos" },
+        { emoji: "🚚", titulo: "Envío gratis",          subtitulo: "En compras grandes",                cta: "Empezar" },
+        { emoji: "📦", titulo: "Catálogo completo",      subtitulo: "Todos nuestros productos",          cta: "Explorar" },
+      ],
+    };
+    const GRADS = [
+      "linear-gradient(120deg, #1a3a5c 0%, #0a1628 60%)",
+      "linear-gradient(120deg, #3a2a10 0%, #0a1628 60%)",
+      "linear-gradient(120deg, #102b22 0%, #0a1628 60%)",
+      "linear-gradient(120deg, #2a1430 0%, #0a1628 60%)",
     ];
 
     /* ============================================================
-       2) CONEXIÓN A SUPABASE (REST, igual que tu app de pedidos)
+       SUPABASE (REST, igual que tu app)
        ============================================================ */
     const SB_URL = "https://vhoswhyixqtomgqudigj.supabase.co";
     const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZob3N3aHlpeHF0b21ncXVkaWdqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MTI4ODIsImV4cCI6MjA5NTM4ODg4Mn0.gjUaVJ1RvF3KrjfXVyh8wYIso4QW6RtIfFRbkd0PyA8";
@@ -68,12 +71,31 @@
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     }
+    async function sbUpsert(table, row, onConflict) {
+      const r = await fetch(`${SB_URL}/rest/v1/${table}?on_conflict=${onConflict}`, {
+        method: "POST",
+        headers: { ...SB_HDR, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+        body: JSON.stringify(row),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
 
-    // Resuelve el código de empresa -> datos de la empresa (incluye UUID)
     async function resolverEmpresa(codigo) {
-      const emps = await sbGet("empresas",
-        `select=id,codigo,nombre,logo,color,appname&codigo=eq.${encodeURIComponent(codigo)}`);
+      const emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname&codigo=eq.${encodeURIComponent(codigo)}`);
       return emps && emps[0] ? emps[0] : null;
+    }
+    async function fetchConfig(empId) {
+      const rows = await sbGet("tienda_config", `select=config&empresa_id=eq.${empId}`);
+      return rows && rows[0] ? rows[0].config : null;
+    }
+    async function guardarConfig(empId, config) {
+      return sbUpsert("tienda_config", { empresa_id: empId, config, updated_at: new Date().toISOString() }, "empresa_id");
+    }
+    async function validarAdmin(empId, uid, pass) {
+      const rows = await sbGet("usuarios",
+        `select=uid,pass,role,name&empresa_id=eq.${empId}&role=eq.admin&uid=eq.${encodeURIComponent(uid)}`);
+      return (rows && rows[0] && rows[0].pass === pass) ? rows[0] : null;
     }
 
     function precioDeLista(p) {
@@ -81,22 +103,13 @@
       if (LISTA_PRECIO === "clientes")  return p.precio_clientes || 0;
       return (p.precios && p.precios[LISTA_PRECIO]) || p.precio_clientes || 0;
     }
-
     function mapProducto(p) {
-      const promo = (p.precio_promo && p.precio_promo > 0)
-        ? { precio: p.precio_promo, cant: p.cant_promo || 0 } : null;
+      const promo = (p.precio_promo && p.precio_promo > 0) ? { precio: p.precio_promo, cant: p.cant_promo || 0 } : null;
       return {
-        id: p.id,
-        codigo: p.codigo || "",
-        nombre: p.nombre || "Sin nombre",
-        cat: p.categoria || "Sin categoría",
-        precio: precioDeLista(p),
-        foto: p.foto || "",
-        promo,
+        id: p.id, codigo: p.codigo || "", nombre: p.nombre || "Sin nombre",
+        cat: p.categoria || "Sin categoría", precio: precioDeLista(p), foto: p.foto || "", promo,
       };
     }
-
-    // Trae los productos reales de la empresa
     async function fetchProductos(empId) {
       const rows = await sbGet("productos",
         "select=id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo" +
@@ -104,7 +117,16 @@
       return (rows || []).map(mapProducto);
     }
 
-    /* Emoji de respaldo por categoría (cuando el producto no tiene foto) */
+    // Mezcla la config guardada con los defaults (por si faltan claves)
+    function mergeCfg(saved) {
+      if (!saved) return { ...CFG_DEFAULT };
+      return {
+        ...CFG_DEFAULT, ...saved,
+        beneficios: Array.isArray(saved.beneficios) ? saved.beneficios : CFG_DEFAULT.beneficios,
+        banners: Array.isArray(saved.banners) ? saved.banners : CFG_DEFAULT.banners,
+      };
+    }
+
     const emojiCat = (nombre) => {
       const n = (nombre || "").toLowerCase();
       if (/bebida|gaseosa|agua|cerveza|vino|jugo/.test(n)) return "🥤";
@@ -117,14 +139,10 @@
       if (/perfu|higien|cosme/.test(n)) return "🧴";
       return "📦";
     };
-
-    /* ============================================================
-       Helpers
-       ============================================================ */
     const fmt = (n) => "$" + Math.round(n || 0).toLocaleString("es-AR", { minimumFractionDigits: 0 });
 
     /* ============================================================
-       Iconos (SVG inline, estilo lucide)
+       Iconos
        ============================================================ */
     const mkIcon = (paths) => ({ size = 24, style, className, fill = "none" }) =>
       <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke="currentColor"
@@ -147,6 +165,19 @@
     const PackageX = mkIcon('<path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l2-1.15"/><polyline points="3.29 7 12 12 20.71 7"/><line x1="12" x2="12" y1="22" y2="12"/><path d="m17 13 5 5m0-5-5 5"/>');
     const Store = mkIcon('<path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"/><path d="M2 7h20"/>');
     const AlertCircle = mkIcon('<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>');
+    const Settings = mkIcon('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>');
+    const Save = mkIcon('<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>');
+    const LogOut = mkIcon('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>');
+    const Star = mkIcon('<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>');
+    const Percent = mkIcon('<line x1="19" x2="5" y1="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>');
+    const CreditCard = mkIcon('<rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/>');
+    const MapPin = mkIcon('<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>');
+    const Phone = mkIcon('<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>');
+    const Gift = mkIcon('<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C9 3 12 8 12 8s3-5 4.5-5a2.5 2.5 0 0 1 0 5"/>');
+
+    // Iconos disponibles para los beneficios
+    const ICONOS = { truck: Truck, shield: ShieldCheck, clock: Clock, tag: Tag, store: Store, star: Star, percent: Percent, card: CreditCard, pin: MapPin, phone: Phone, gift: Gift };
+    const ICONO_KEYS = Object.keys(ICONOS);
 
     /* ============================================================
        COMPONENTE PRINCIPAL
@@ -155,7 +186,9 @@
       const [empresa, setEmpresa] = useState(null);
       const [productos, setProductos] = useState([]);
       const [cargando, setCargando] = useState(true);
-      const [aviso, setAviso] = useState("");      // mensaje de error/estado
+      const [aviso, setAviso] = useState("");
+      const [cfg, setCfg] = useState(CFG_DEFAULT);
+
       const [cat, setCat] = useState("todos");
       const [busqueda, setBusqueda] = useState("");
       const [orden, setOrden] = useState("relevancia");
@@ -164,46 +197,45 @@
       const [carritoAbierto, setCarritoAbierto] = useState(false);
       const [slide, setSlide] = useState(0);
 
-      // Carga inicial: resolver empresa por código y traer productos
+      // Admin
+      const [loginOpen, setLoginOpen] = useState(false);
+      const [adminOk, setAdminOk] = useState(false);
+      const [editorOpen, setEditorOpen] = useState(false);
+      const [loginUid, setLoginUid] = useState("");
+      const [loginPass, setLoginPass] = useState("");
+      const [loginErr, setLoginErr] = useState("");
+      const [loginCargando, setLoginCargando] = useState(false);
+      const [editCfg, setEditCfg] = useState(CFG_DEFAULT);
+      const [guardando, setGuardando] = useState(false);
+
       useEffect(() => {
         (async () => {
           try {
             const params = new URLSearchParams(window.location.search);
             const codigo = params.get("emp") || EMP_CODIGO_DEFAULT;
-            if (!codigo) {
-              setAviso("Falta el código de empresa. Abrí la página con ?emp=TUCODIGO en la URL, o cargá EMP_CODIGO_DEFAULT en el archivo.");
-              setCargando(false);
-              return;
-            }
+            if (!codigo) { setAviso("Falta el código de empresa. Abrí con ?emp=TUCODIGO en la URL."); setCargando(false); return; }
             const emp = await resolverEmpresa(codigo);
-            if (!emp) {
-              setAviso(`No se encontró la empresa con código "${codigo}".`);
-              setCargando(false);
-              return;
-            }
+            if (!emp) { setAviso(`No se encontró la empresa con código "${codigo}".`); setCargando(false); return; }
             setEmpresa(emp);
-            const prods = await fetchProductos(emp.id);
+            const [prods, savedCfg] = await Promise.all([fetchProductos(emp.id), fetchConfig(emp.id).catch(() => null)]);
             setProductos(prods);
+            setCfg(mergeCfg(savedCfg));
             if (!prods.length) setAviso("La empresa no tiene productos cargados todavía.");
           } catch (e) {
             console.error("Supabase:", e.message);
             setAviso("Error al conectar con la base: " + e.message);
-          } finally {
-            setCargando(false);
-          }
+          } finally { setCargando(false); }
         })();
       }, []);
 
       useEffect(() => {
-        const t = setInterval(() => setSlide((s) => (s + 1) % BANNERS.length), 5000);
+        const t = setInterval(() => setSlide((s) => (s + 1) % (cfg.banners.length || 1)), 5000);
         return () => clearInterval(t);
-      }, []);
+      }, [cfg.banners.length]);
 
-      // Branding de la empresa
-      const nombreTienda = empresa?.nombre || TIENDA.nombre;
+      const nombreTienda = cfg.nombre || empresa?.nombre || "Mi Tienda";
       const logoEmpresa = empresa?.logo || "";
 
-      // Categorías dinámicas desde los productos
       const categorias = useMemo(() => {
         const set = [];
         productos.forEach((p) => { if (!set.includes(p.cat)) set.push(p.cat); });
@@ -214,8 +246,7 @@
       const visibles = useMemo(() => {
         let arr = productos.filter((p) => {
           const okCat = cat === "todos" || p.cat === cat;
-          const okBusq = p.nombre.toLowerCase().includes(busqueda.toLowerCase()) ||
-                         (p.codigo || "").toLowerCase().includes(busqueda.toLowerCase());
+          const okBusq = p.nombre.toLowerCase().includes(busqueda.toLowerCase()) || (p.codigo || "").toLowerCase().includes(busqueda.toLowerCase());
           const okOferta = !soloOfertas || p.promo;
           return okCat && okBusq && okOferta;
         });
@@ -226,26 +257,54 @@
       }, [productos, cat, busqueda, orden, soloOfertas]);
 
       const agregar = (id) => setCarrito((c) => ({ ...c, [id]: (c[id] || 0) + 1 }));
-      const quitar = (id) => setCarrito((c) => {
-        const n = (c[id] || 0) - 1; const copia = { ...c };
-        if (n <= 0) delete copia[id]; else copia[id] = n; return copia;
-      });
-      const eliminar = (id) => setCarrito((c) => { const copia = { ...c }; delete copia[id]; return copia; });
+      const quitar = (id) => setCarrito((c) => { const n = (c[id] || 0) - 1; const cp = { ...c }; if (n <= 0) delete cp[id]; else cp[id] = n; return cp; });
+      const eliminar = (id) => setCarrito((c) => { const cp = { ...c }; delete cp[id]; return cp; });
       const vaciar = () => setCarrito({});
 
-      const itemsCarrito = Object.entries(carrito).map(([id, qty]) => ({
-        ...productos.find((p) => String(p.id) === String(id)), qty,
-      })).filter((i) => i.id !== undefined);
+      const itemsCarrito = Object.entries(carrito).map(([id, qty]) => ({ ...productos.find((p) => String(p.id) === String(id)), qty })).filter((i) => i.id !== undefined);
       const totalUnidades = itemsCarrito.reduce((a, i) => a + i.qty, 0);
       const totalPesos = itemsCarrito.reduce((a, i) => a + i.precio * i.qty, 0);
-      const faltaEnvio = Math.max(0, TIENDA.envioGratisDesde - totalPesos);
-      const progresoEnvio = Math.min(100, (totalPesos / TIENDA.envioGratisDesde) * 100);
+      const faltaEnvio = Math.max(0, cfg.envioGratisDesde - totalPesos);
+      const progresoEnvio = Math.min(100, (totalPesos / cfg.envioGratisDesde) * 100);
 
       const finalizar = () => {
         const lineas = itemsCarrito.map((i) => `• ${i.qty}x ${i.nombre} — ${fmt(i.precio * i.qty)}`).join("\n");
         const msg = `Hola! Quiero hacer este pedido:\n\n${lineas}\n\nTotal: ${fmt(totalPesos)}`;
-        window.open(`https://wa.me/${TIENDA.whatsapp}?text=${encodeURIComponent(msg)}`, "_blank");
+        window.open(`https://wa.me/${cfg.whatsapp}?text=${encodeURIComponent(msg)}`, "_blank");
       };
+
+      /* ---- Admin ---- */
+      const abrirAdmin = () => { if (adminOk) { setEditCfg(JSON.parse(JSON.stringify(cfg))); setEditorOpen(true); } else { setLoginOpen(true); setLoginErr(""); } };
+      const hacerLogin = async () => {
+        if (!empresa) return;
+        setLoginCargando(true); setLoginErr("");
+        try {
+          const ok = await validarAdmin(empresa.id, loginUid.trim(), loginPass);
+          if (ok) { setAdminOk(true); setLoginOpen(false); setLoginPass(""); setEditCfg(JSON.parse(JSON.stringify(cfg))); setEditorOpen(true); }
+          else setLoginErr("Usuario o contraseña incorrectos.");
+        } catch (e) { setLoginErr("Error: " + e.message); }
+        finally { setLoginCargando(false); }
+      };
+      const salirAdmin = () => { setAdminOk(false); setEditorOpen(false); };
+
+      const setEF = (k, v) => setEditCfg((c) => ({ ...c, [k]: v }));
+      const setBenef = (i, k, v) => setEditCfg((c) => { const b = [...c.beneficios]; b[i] = { ...b[i], [k]: v }; return { ...c, beneficios: b }; });
+      const addBenef = () => setEditCfg((c) => ({ ...c, beneficios: [...c.beneficios, { icon: "star", t: "Nuevo beneficio", s: "Descripción" }] }));
+      const delBenef = (i) => setEditCfg((c) => ({ ...c, beneficios: c.beneficios.filter((_, j) => j !== i) }));
+      const setBan = (i, k, v) => setEditCfg((c) => { const b = [...c.banners]; b[i] = { ...b[i], [k]: v }; return { ...c, banners: b }; });
+      const addBan = () => setEditCfg((c) => ({ ...c, banners: [...c.banners, { emoji: "✨", titulo: "Nuevo banner", subtitulo: "Subtítulo", cta: "Ver" }] }));
+      const delBan = (i) => setEditCfg((c) => ({ ...c, banners: c.banners.filter((_, j) => j !== i) }));
+
+      const guardar = async () => {
+        if (!empresa) return;
+        setGuardando(true);
+        try { await guardarConfig(empresa.id, editCfg); setCfg(editCfg); setEditorOpen(false); setSlide(0); alert("✅ Cambios guardados"); }
+        catch (e) { alert("❌ No se pudo guardar: " + e.message); }
+        finally { setGuardando(false); }
+      };
+
+      const inputCls = "w-full px-3 py-2 rounded-lg text-sm outline-none";
+      const inputStyle = { background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}`, color: TEMA.texto };
 
       return (
         <div style={{ background: TEMA.bg, color: TEMA.texto, fontFamily: "'DM Sans', sans-serif" }} className="min-h-screen w-full">
@@ -253,74 +312,72 @@
           <header className="sticky top-0 z-30 backdrop-blur" style={{ background: TEMA.bg + "e6", borderBottom: `1px solid ${TEMA.borde}` }}>
             <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
               <div className="flex items-center gap-2 shrink-0">
-                {logoEmpresa
-                  ? <img src={logoEmpresa} alt="logo" className="w-9 h-9 rounded-lg object-cover" />
-                  : <span className="text-2xl">{TIENDA.logo}</span>}
+                {logoEmpresa ? <img src={logoEmpresa} alt="logo" className="w-9 h-9 rounded-lg object-cover" /> : <span className="text-2xl">🛒</span>}
                 <div className="leading-tight">
                   <div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="font-extrabold text-lg">{nombreTienda}</div>
-                  <div style={{ color: TEMA.textoSuave }} className="text-[11px] hidden sm:block">{TIENDA.tagline}</div>
+                  <div style={{ color: TEMA.textoSuave }} className="text-[11px] hidden sm:block">{cfg.tagline}</div>
                 </div>
               </div>
               <div className="flex-1 relative">
                 <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: TEMA.textoSuave }} />
                 <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar productos…"
-                  className="w-full pl-10 pr-3 py-2 rounded-xl text-sm outline-none"
-                  style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.texto }} />
+                  className="w-full pl-10 pr-3 py-2 rounded-xl text-sm outline-none" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.texto }} />
               </div>
+              <button onClick={abrirAdmin} title="Administrar tienda" className="shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: adminOk ? TEMA.gold : TEMA.textoSuave }}>
+                <Settings size={18} />
+              </button>
               <button onClick={() => setCarritoAbierto(true)} className="relative shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>
                 <ShoppingCart size={20} />
-                {totalUnidades > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 text-[11px] font-bold w-5 h-5 rounded-full flex items-center justify-center" style={{ background: TEMA.oferta, color: "#fff" }}>{totalUnidades}</span>
-                )}
+                {totalUnidades > 0 && <span className="absolute -top-1.5 -right-1.5 text-[11px] font-bold w-5 h-5 rounded-full flex items-center justify-center" style={{ background: TEMA.oferta, color: "#fff" }}>{totalUnidades}</span>}
               </button>
             </div>
           </header>
 
           <main className="max-w-6xl mx-auto px-4 pb-24">
-            {/* BANNER / SLIDER */}
-            <section className="mt-4 relative rounded-2xl overflow-hidden" style={{ height: 200 }}>
-              {BANNERS.map((b, i) => (
-                <div key={i} className="absolute inset-0 transition-opacity duration-700 flex items-center"
-                  style={{ background: b.grad, opacity: i === slide ? 1 : 0, pointerEvents: i === slide ? "auto" : "none" }}>
-                  <div className="px-6 sm:px-10 max-w-md">
-                    <div className="text-4xl mb-2">{b.emoji}</div>
-                    <h2 style={{ fontFamily: "'Syne', sans-serif" }} className="text-2xl sm:text-3xl font-extrabold mb-1">{b.titulo}</h2>
-                    <p style={{ color: TEMA.textoSuave }} className="text-sm mb-3">{b.subtitulo}</p>
-                    <button className="px-4 py-2 rounded-lg text-sm font-bold transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>{b.cta}</button>
+            {/* BANNERS */}
+            {cfg.banners.length > 0 && (
+              <section className="mt-4 relative rounded-2xl overflow-hidden" style={{ height: 200 }}>
+                {cfg.banners.map((b, i) => (
+                  <div key={i} className="absolute inset-0 transition-opacity duration-700 flex items-center" style={{ background: GRADS[i % GRADS.length], opacity: i === slide ? 1 : 0, pointerEvents: i === slide ? "auto" : "none" }}>
+                    <div className="px-6 sm:px-10 max-w-md">
+                      <div className="text-4xl mb-2">{b.emoji}</div>
+                      <h2 style={{ fontFamily: "'Syne', sans-serif" }} className="text-2xl sm:text-3xl font-extrabold mb-1">{b.titulo}</h2>
+                      <p style={{ color: TEMA.textoSuave }} className="text-sm mb-3">{b.subtitulo}</p>
+                      {b.cta && <button className="px-4 py-2 rounded-lg text-sm font-bold" style={{ background: TEMA.gold, color: TEMA.bg }}>{b.cta}</button>}
+                    </div>
                   </div>
-                </div>
-              ))}
-              <button onClick={() => setSlide((s) => (s - 1 + BANNERS.length) % BANNERS.length)} className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full" style={{ background: "#00000055" }}><ChevronLeft size={18} /></button>
-              <button onClick={() => setSlide((s) => (s + 1) % BANNERS.length)} className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full" style={{ background: "#00000055" }}><ChevronRight size={18} /></button>
-              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
-                {BANNERS.map((_, i) => (
-                  <button key={i} onClick={() => setSlide(i)} className="h-1.5 rounded-full transition-all" style={{ width: i === slide ? 20 : 6, background: i === slide ? TEMA.gold : TEMA.textoSuave }} />
                 ))}
-              </div>
-            </section>
-
-            {/* BENEFICIOS */}
-            <section className="mt-4 grid grid-cols-3 gap-2">
-              {[
-                { icon: Truck, t: "Envío gratis", s: `Desde ${fmt(TIENDA.envioGratisDesde)}` },
-                { icon: ShieldCheck, t: "Compra segura", s: "Pago protegido" },
-                { icon: Clock, t: "Entrega 24/48h", s: "En toda la zona" },
-              ].map((b, i) => (
-                <div key={i} className="rounded-xl p-3 flex items-center gap-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
-                  <b.icon size={20} style={{ color: TEMA.gold }} className="shrink-0" />
-                  <div className="leading-tight min-w-0">
-                    <div className="text-xs font-bold truncate">{b.t}</div>
-                    <div style={{ color: TEMA.textoSuave }} className="text-[11px] truncate">{b.s}</div>
+                {cfg.banners.length > 1 && <>
+                  <button onClick={() => setSlide((s) => (s - 1 + cfg.banners.length) % cfg.banners.length)} className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full" style={{ background: "#00000055" }}><ChevronLeft size={18} /></button>
+                  <button onClick={() => setSlide((s) => (s + 1) % cfg.banners.length)} className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full" style={{ background: "#00000055" }}><ChevronRight size={18} /></button>
+                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
+                    {cfg.banners.map((_, i) => <button key={i} onClick={() => setSlide(i)} className="h-1.5 rounded-full transition-all" style={{ width: i === slide ? 20 : 6, background: i === slide ? TEMA.gold : TEMA.textoSuave }} />)}
                   </div>
-                </div>
-              ))}
-            </section>
+                </>}
+              </section>
+            )}
 
-            {/* AVISO (modo sin empresa / error / sin productos) */}
+            {/* BENEFICIOS (editables por el admin) */}
+            {cfg.beneficios.length > 0 && (
+              <section className="mt-4 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(cfg.beneficios.length, 3)}, minmax(0, 1fr))` }}>
+                {cfg.beneficios.map((b, i) => {
+                  const Ic = ICONOS[b.icon] || Star;
+                  return (
+                    <div key={i} className="rounded-xl p-3 flex items-center gap-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+                      <Ic size={20} style={{ color: TEMA.gold }} className="shrink-0" />
+                      <div className="leading-tight min-w-0">
+                        <div className="text-xs font-bold truncate">{b.t}</div>
+                        <div style={{ color: TEMA.textoSuave }} className="text-[11px] truncate">{b.s}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </section>
+            )}
+
             {aviso && (
               <div className="mt-4 rounded-xl p-3 flex items-start gap-2 text-sm" style={{ background: "#2a1410", border: `1px solid ${TEMA.oferta}` }}>
-                <AlertCircle size={18} style={{ color: TEMA.oferta }} className="shrink-0 mt-0.5" />
-                <span>{aviso}</span>
+                <AlertCircle size={18} style={{ color: TEMA.oferta }} className="shrink-0 mt-0.5" /><span>{aviso}</span>
               </div>
             )}
 
@@ -329,13 +386,10 @@
               <section className="mt-5 flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
                 {categorias.map((c) => {
                   const activa = cat === c;
-                  const label = c === "todos" ? "Todos" : c;
-                  const emo = c === "todos" ? "🏬" : emojiCat(c);
                   return (
-                    <button key={c} onClick={() => setCat(c)}
-                      className="shrink-0 px-3.5 py-2 rounded-full text-sm font-medium transition active:scale-95 flex items-center gap-1.5"
+                    <button key={c} onClick={() => setCat(c)} className="shrink-0 px-3.5 py-2 rounded-full text-sm font-medium transition active:scale-95 flex items-center gap-1.5"
                       style={{ background: activa ? TEMA.gold : TEMA.bgCard, color: activa ? TEMA.bg : TEMA.texto, border: `1px solid ${activa ? TEMA.gold : TEMA.borde}` }}>
-                      <span>{emo}</span>{label}
+                      <span>{c === "todos" ? "🏬" : emojiCat(c)}</span>{c === "todos" ? "Todos" : c}
                     </button>
                   );
                 })}
@@ -344,15 +398,13 @@
 
             {/* FILTROS */}
             <section className="mt-4 flex items-center justify-between gap-3 flex-wrap">
-              <button onClick={() => setSoloOfertas((v) => !v)}
-                className="px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 transition active:scale-95"
+              <button onClick={() => setSoloOfertas((v) => !v)} className="px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 transition active:scale-95"
                 style={{ background: soloOfertas ? TEMA.oferta : TEMA.bgCard, color: soloOfertas ? "#fff" : TEMA.texto, border: `1px solid ${soloOfertas ? TEMA.oferta : TEMA.borde}` }}>
                 <Tag size={15} /> Solo promos
               </button>
               <div className="flex items-center gap-2">
                 <SlidersHorizontal size={15} style={{ color: TEMA.textoSuave }} />
-                <select value={orden} onChange={(e) => setOrden(e.target.value)} className="text-sm rounded-lg px-2 py-1.5 outline-none"
-                  style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.texto }}>
+                <select value={orden} onChange={(e) => setOrden(e.target.value)} className="text-sm rounded-lg px-2 py-1.5 outline-none" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.texto }}>
                   <option value="relevancia">Relevancia</option>
                   <option value="precio-asc">Menor precio</option>
                   <option value="precio-desc">Mayor precio</option>
@@ -365,9 +417,7 @@
             {cargando ? (
               <div className="mt-10 text-center" style={{ color: TEMA.textoSuave }}>Cargando productos…</div>
             ) : visibles.length === 0 ? (
-              <div className="mt-12 text-center flex flex-col items-center gap-2" style={{ color: TEMA.textoSuave }}>
-                <PackageX size={40} /><p>No hay productos para mostrar.</p>
-              </div>
+              <div className="mt-12 text-center flex flex-col items-center gap-2" style={{ color: TEMA.textoSuave }}><PackageX size={40} /><p>No hay productos para mostrar.</p></div>
             ) : (
               <section className="mt-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                 {visibles.map((p) => {
@@ -375,27 +425,17 @@
                   return (
                     <div key={p.id} className="rounded-2xl overflow-hidden flex flex-col transition hover:-translate-y-0.5" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
                       <div className="relative h-28 flex items-center justify-center" style={{ background: TEMA.bgSoft }}>
-                        {p.foto
-                          ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain p-1" loading="lazy" />
-                          : <span className="text-5xl">{emojiCat(p.cat)}</span>}
-                        {p.promo && (
-                          <span className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: TEMA.oferta, color: "#fff" }}>PROMO</span>
-                        )}
+                        {p.foto ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain p-1" loading="lazy" /> : <span className="text-5xl">{emojiCat(p.cat)}</span>}
+                        {p.promo && <span className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: TEMA.oferta, color: "#fff" }}>PROMO</span>}
                       </div>
                       <div className="p-3 flex flex-col flex-1">
                         <h3 className="text-sm font-medium leading-snug mb-1 line-clamp-2">{p.nombre}</h3>
                         <div className="mt-auto">
                           <div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-lg font-extrabold">{fmt(p.precio)}</div>
-                          {p.promo && (
-                            <div className="text-[11px]" style={{ color: TEMA.ok }}>
-                              {fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}
-                            </div>
-                          )}
+                          {p.promo && <div className="text-[11px]" style={{ color: TEMA.ok }}>{fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
                         </div>
                         {enCarrito === 0 ? (
-                          <button onClick={() => agregar(p.id)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>
-                            <Plus size={16} /> Agregar
-                          </button>
+                          <button onClick={() => agregar(p.id)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={16} /> Agregar</button>
                         ) : (
                           <div className="mt-2 w-full py-1 rounded-lg flex items-center justify-between" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }}>
                             <button onClick={() => quitar(p.id)} className="px-3 py-1"><Minus size={16} style={{ color: TEMA.gold }} /></button>
@@ -422,43 +462,27 @@
                 </div>
                 <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
                   {itemsCarrito.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center gap-2" style={{ color: TEMA.textoSuave }}>
-                      <Store size={40} /><p className="text-sm">Tu carrito está vacío</p>
-                    </div>
-                  ) : (
-                    itemsCarrito.map((i) => (
-                      <div key={i.id} className="flex items-center gap-3 rounded-xl p-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
-                        <div className="w-12 h-12 rounded-lg flex items-center justify-center overflow-hidden shrink-0" style={{ background: TEMA.bgSoft }}>
-                          {i.foto ? <img src={i.foto} alt="" className="w-full h-full object-contain" /> : <span className="text-2xl">{emojiCat(i.cat)}</span>}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium truncate">{i.nombre}</div>
-                          <div style={{ color: TEMA.gold }} className="text-sm font-bold">{fmt(i.precio * i.qty)}</div>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <button onClick={() => quitar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Minus size={14} /></button>
-                          <span className="text-sm font-bold w-5 text-center">{i.qty}</span>
-                          <button onClick={() => agregar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Plus size={14} /></button>
-                          <button onClick={() => eliminar(i.id)} className="p-1 ml-1"><Trash2 size={15} style={{ color: TEMA.oferta }} /></button>
-                        </div>
+                    <div className="h-full flex flex-col items-center justify-center gap-2" style={{ color: TEMA.textoSuave }}><Store size={40} /><p className="text-sm">Tu carrito está vacío</p></div>
+                  ) : itemsCarrito.map((i) => (
+                    <div key={i.id} className="flex items-center gap-3 rounded-xl p-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+                      <div className="w-12 h-12 rounded-lg flex items-center justify-center overflow-hidden shrink-0" style={{ background: TEMA.bgSoft }}>{i.foto ? <img src={i.foto} alt="" className="w-full h-full object-contain" /> : <span className="text-2xl">{emojiCat(i.cat)}</span>}</div>
+                      <div className="flex-1 min-w-0"><div className="text-sm font-medium truncate">{i.nombre}</div><div style={{ color: TEMA.gold }} className="text-sm font-bold">{fmt(i.precio * i.qty)}</div></div>
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => quitar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Minus size={14} /></button>
+                        <span className="text-sm font-bold w-5 text-center">{i.qty}</span>
+                        <button onClick={() => agregar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Plus size={14} /></button>
+                        <button onClick={() => eliminar(i.id)} className="p-1 ml-1"><Trash2 size={15} style={{ color: TEMA.oferta }} /></button>
                       </div>
-                    ))
-                  )}
+                    </div>
+                  ))}
                 </div>
                 {itemsCarrito.length > 0 && (
                   <div className="px-4 py-3 space-y-3" style={{ borderTop: `1px solid ${TEMA.borde}` }}>
                     <div>
-                      <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>
-                        {faltaEnvio > 0 ? `Te faltan ${fmt(faltaEnvio)} para el envío gratis` : "🎉 ¡Tenés envío gratis!"}
-                      </div>
-                      <div className="h-1.5 rounded-full overflow-hidden" style={{ background: TEMA.bgSoft }}>
-                        <div className="h-full rounded-full transition-all" style={{ width: `${progresoEnvio}%`, background: TEMA.ok }} />
-                      </div>
+                      <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>{faltaEnvio > 0 ? `Te faltan ${fmt(faltaEnvio)} para el envío gratis` : "🎉 ¡Tenés envío gratis!"}</div>
+                      <div className="h-1.5 rounded-full overflow-hidden" style={{ background: TEMA.bgSoft }}><div className="h-full rounded-full transition-all" style={{ width: `${progresoEnvio}%`, background: TEMA.ok }} /></div>
                     </div>
-                    <div className="flex items-center justify-between">
-                      <span style={{ color: TEMA.textoSuave }}>Total</span>
-                      <span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-2xl font-extrabold">{fmt(totalPesos)}</span>
-                    </div>
+                    <div className="flex items-center justify-between"><span style={{ color: TEMA.textoSuave }}>Total</span><span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-2xl font-extrabold">{fmt(totalPesos)}</span></div>
                     <div className="flex gap-2">
                       <button onClick={vaciar} className="px-3 py-3 rounded-xl text-sm font-medium" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.textoSuave }}>Vaciar</button>
                       <button onClick={finalizar} className="flex-1 py-3 rounded-xl font-bold transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>Finalizar pedido</button>
@@ -466,6 +490,100 @@
                   </div>
                 )}
               </aside>
+            </div>
+          )}
+
+          {/* MODAL LOGIN ADMIN */}
+          {loginOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "#000000aa" }} onClick={() => setLoginOpen(false)}>
+              <div className="w-full max-w-xs rounded-2xl p-5" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }} onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center gap-2 mb-1"><Settings size={20} style={{ color: TEMA.gold }} /><h2 style={{ fontFamily: "'Syne', sans-serif" }} className="font-extrabold text-lg">Administrar tienda</h2></div>
+                <p className="text-xs mb-4" style={{ color: TEMA.textoSuave }}>Ingresá con tu usuario admin de la empresa.</p>
+                <input value={loginUid} onChange={(e) => setLoginUid(e.target.value)} placeholder="Usuario" className={inputCls + " mb-2"} style={inputStyle} />
+                <input value={loginPass} onChange={(e) => setLoginPass(e.target.value)} onKeyDown={(e) => e.key === "Enter" && hacerLogin()} type="password" placeholder="Contraseña" className={inputCls} style={inputStyle} />
+                {loginErr && <div className="text-xs mt-2" style={{ color: TEMA.oferta }}>{loginErr}</div>}
+                <div className="flex gap-2 mt-4">
+                  <button onClick={() => setLoginOpen(false)} className="px-3 py-2.5 rounded-lg text-sm" style={{ background: TEMA.bgSoft, color: TEMA.textoSuave }}>Cancelar</button>
+                  <button onClick={hacerLogin} disabled={loginCargando} className="flex-1 py-2.5 rounded-lg text-sm font-bold" style={{ background: TEMA.gold, color: TEMA.bg, opacity: loginCargando ? .6 : 1 }}>{loginCargando ? "Verificando…" : "Entrar"}</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* PANEL EDITOR ADMIN */}
+          {editorOpen && (
+            <div className="fixed inset-0 z-50 overflow-y-auto" style={{ background: TEMA.bg }}>
+              <div className="sticky top-0 z-10 px-4 py-3 flex items-center justify-between backdrop-blur" style={{ background: TEMA.bg + "ee", borderBottom: `1px solid ${TEMA.borde}` }}>
+                <div className="flex items-center gap-2"><Settings size={20} style={{ color: TEMA.gold }} /><h2 style={{ fontFamily: "'Syne', sans-serif" }} className="font-extrabold text-lg">Editor de la tienda</h2></div>
+                <div className="flex items-center gap-2">
+                  <button onClick={salirAdmin} title="Cerrar sesión" className="p-2 rounded-lg" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.textoSuave }}><LogOut size={16} /></button>
+                  <button onClick={() => setEditorOpen(false)} className="p-2 rounded-lg" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}><X size={18} /></button>
+                  <button onClick={guardar} disabled={guardando} className="px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-1.5" style={{ background: TEMA.gold, color: TEMA.bg, opacity: guardando ? .6 : 1 }}><Save size={16} /> {guardando ? "Guardando…" : "Guardar"}</button>
+                </div>
+              </div>
+
+              <div className="max-w-2xl mx-auto px-4 py-5 space-y-6 pb-24">
+                {/* IDENTIDAD */}
+                <div>
+                  <h3 className="text-sm font-bold mb-3" style={{ color: TEMA.gold }}>Identidad</h3>
+                  <div className="space-y-2">
+                    <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>Nombre de la tienda (vacío = nombre de la empresa)</label><input value={editCfg.nombre} onChange={(e) => setEF("nombre", e.target.value)} placeholder={empresa?.nombre || ""} className={inputCls} style={inputStyle} /></div>
+                    <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>Frase / tagline</label><input value={editCfg.tagline} onChange={(e) => setEF("tagline", e.target.value)} className={inputCls} style={inputStyle} /></div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>WhatsApp (con código país)</label><input value={editCfg.whatsapp} onChange={(e) => setEF("whatsapp", e.target.value.replace(/[^0-9]/g, ""))} placeholder="5492804..." className={inputCls} style={inputStyle} /></div>
+                      <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>Envío gratis desde ($)</label><input type="number" value={editCfg.envioGratisDesde} onChange={(e) => setEF("envioGratisDesde", Number(e.target.value) || 0)} className={inputCls} style={inputStyle} /></div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* BENEFICIOS */}
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-bold" style={{ color: TEMA.gold }}>Franja de beneficios</h3>
+                    <button onClick={addBenef} className="text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}><Plus size={13} /> Agregar</button>
+                  </div>
+                  <div className="space-y-2">
+                    {editCfg.beneficios.map((b, i) => {
+                      const Ic = ICONOS[b.icon] || Star;
+                      return (
+                        <div key={i} className="rounded-xl p-3 flex items-start gap-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+                          <div className="flex flex-col items-center gap-1 pt-1"><Ic size={20} style={{ color: TEMA.gold }} />
+                            <select value={b.icon} onChange={(e) => setBenef(i, "icon", e.target.value)} className="text-[10px] rounded px-1 py-0.5 outline-none" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}`, color: TEMA.texto }}>
+                              {ICONO_KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+                            </select>
+                          </div>
+                          <div className="flex-1 space-y-1.5">
+                            <input value={b.t} onChange={(e) => setBenef(i, "t", e.target.value)} placeholder="Título" className={inputCls} style={inputStyle} />
+                            <input value={b.s} onChange={(e) => setBenef(i, "s", e.target.value)} placeholder="Descripción" className={inputCls} style={inputStyle} />
+                          </div>
+                          <button onClick={() => delBenef(i)} className="p-1.5 mt-1"><Trash2 size={16} style={{ color: TEMA.oferta }} /></button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* BANNERS */}
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-bold" style={{ color: TEMA.gold }}>Banners / promos</h3>
+                    <button onClick={addBan} className="text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}><Plus size={13} /> Agregar</button>
+                  </div>
+                  <div className="space-y-2">
+                    {editCfg.banners.map((b, i) => (
+                      <div key={i} className="rounded-xl p-3 flex items-start gap-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+                        <input value={b.emoji} onChange={(e) => setBan(i, "emoji", e.target.value)} className="w-12 text-center text-2xl rounded-lg py-1 outline-none" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }} maxLength={2} />
+                        <div className="flex-1 space-y-1.5">
+                          <input value={b.titulo} onChange={(e) => setBan(i, "titulo", e.target.value)} placeholder="Título" className={inputCls} style={inputStyle} />
+                          <input value={b.subtitulo} onChange={(e) => setBan(i, "subtitulo", e.target.value)} placeholder="Subtítulo" className={inputCls} style={inputStyle} />
+                          <input value={b.cta} onChange={(e) => setBan(i, "cta", e.target.value)} placeholder="Texto del botón" className={inputCls} style={inputStyle} />
+                        </div>
+                        <button onClick={() => delBan(i)} className="p-1.5 mt-1"><Trash2 size={16} style={{ color: TEMA.oferta }} /></button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>
