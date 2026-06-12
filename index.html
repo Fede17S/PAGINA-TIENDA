@@ -264,6 +264,7 @@
       const [orden, setOrden] = useState("relevancia");
       const [soloOfertas, setSoloOfertas] = useState(false);
       const [carrito, setCarrito] = useState({});
+      const [modos, setModos] = useState({});   // { [id]: "unidad" | "caja" }
       const [carritoAbierto, setCarritoAbierto] = useState(false);
       const [paso, setPaso] = useState("carrito");   // carrito | revisar | exito
       const [cliNom, setCliNom] = useState("");
@@ -324,6 +325,7 @@
           if (raw) {
             const d = JSON.parse(raw);
             if (d.carrito && typeof d.carrito === "object") setCarrito(d.carrito);
+            if (d.modos && typeof d.modos === "object") setModos(d.modos);
             if (d.cliNom) setCliNom(d.cliNom);
             if (d.cliTel) setCliTel(d.cliTel);
             if (d.cliDir) setCliDir(d.cliDir);
@@ -335,9 +337,9 @@
       useEffect(() => {
         if (!empresa || !restoredRef.current) return;
         try {
-          localStorage.setItem("tienda_cart_" + empresa.codigo, JSON.stringify({ carrito, cliNom, cliTel, cliDir }));
+          localStorage.setItem("tienda_cart_" + empresa.codigo, JSON.stringify({ carrito, modos, cliNom, cliTel, cliDir }));
         } catch (e) { /* sin persistencia */ }
-      }, [carrito, cliNom, cliTel, cliDir, empresa]);
+      }, [carrito, modos, cliNom, cliTel, cliDir, empresa]);
 
       // Mostrar botón "volver arriba" al scrollear
       useEffect(() => {
@@ -433,8 +435,6 @@
       // Tarjeta de producto reutilizable
       const renderCard = (p) => {
         const enCarrito = carrito[p.id] || 0;
-        const esBulto = p.unidadVenta === "bulto";
-        const precioPrincipal = esBulto ? p.precio * (p.unidadesBulto || 1) : p.precio;
         return (
           <div key={p.id} data-prod className="rounded-2xl overflow-hidden flex flex-col transition hover:-translate-y-0.5" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
             <div data-thumb onClick={() => setDetalle(p)} className="relative h-28 flex items-center justify-center cursor-pointer" style={{ background: TEMA.bgSoft }}>
@@ -444,14 +444,9 @@
             <div className="p-3 flex flex-col flex-1">
               <h3 onClick={() => setDetalle(p)} className="text-sm font-medium leading-snug mb-1 line-clamp-2 cursor-pointer">{p.nombre}</h3>
               <div className="mt-auto">
-                <div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.texto }} className="text-lg font-extrabold">{fmt(precioPrincipal)}</div>
-                {esBulto ? (
-                  <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>{fmt(p.precio)} c/u · bulto x{p.unidadesBulto}</div>
-                ) : (p.unidadesBulto > 1 ? (
-                  <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>x{p.unidadesBulto}: {fmt(p.precio * p.unidadesBulto)}{p.minCompra > 1 ? ` · mín. ${p.minCompra}u` : ""}</div>
-                ) : (p.minCompra > 1 ? (
-                  <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>mínimo {p.minCompra} u.</div>
-                ) : null))}
+                <div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.texto }} className="text-lg font-extrabold">{fmt(p.precio)}</div>
+                {p.unidadesBulto > 1 && <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>📦 caja x{p.unidadesBulto}: {fmt(p.precio * p.unidadesBulto)}</div>}
+                {p.minCompra > 1 && <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>mínimo {p.minCompra} u.</div>}
                 {p.promo && <div className="text-[11px]" style={{ color: TEMA.ok }}>{fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
               </div>
               {enCarrito === 0 ? (
@@ -469,9 +464,18 @@
       };
 
       const prodById = (id) => productos.find((x) => String(x.id) === String(id));
-      const precioVentaDe = (p) => p.unidadVenta === "bulto" ? p.precio * (p.unidadesBulto || 1) : p.precio;
-      const qtyInicialDe = (p) => p.unidadVenta === "bulto" ? Math.max(1, p.cantDefault || 1) : Math.max(p.minCompra || 1, p.cantDefault || 1);
-      const minDe = (p) => p.unidadVenta === "bulto" ? 1 : (p.minCompra || 1);
+      const modoDe = (id) => modos[id] || "unidad";
+      const precioVentaDe = (p) => modoDe(p.id) === "caja" ? p.precio * (p.unidadesBulto || 1) : p.precio;
+      const qtyInicialDe = (p) => modoDe(p.id) === "caja" ? 1 : Math.max(p.minCompra || 1, p.cantDefault || 1);
+      const minDe = (p) => modoDe(p.id) === "caja" ? 1 : (p.minCompra || 1);
+      const elegirModo = (p, modo) => {
+        setModos((m) => ({ ...m, [p.id]: modo }));
+        setCarrito((c) => {
+          if (!c[p.id]) return c;
+          const ini = modo === "caja" ? 1 : Math.max(p.minCompra || 1, p.cantDefault || 1);
+          return { ...c, [p.id]: ini };
+        });
+      };
 
       const agregar = (id) => {
         const p = prodById(id);
@@ -518,8 +522,9 @@
       const itemsCarrito = Object.entries(carrito).map(([id, qty]) => {
         const p = productos.find((x) => String(x.id) === String(id));
         if (!p) return null;
-        const precioVenta = precioVentaDe(p);
-        return { ...p, qty, precioVenta, subtotal: precioVenta * qty };
+        const modo = modos[id] || "unidad";
+        const precioVenta = modo === "caja" ? p.precio * (p.unidadesBulto || 1) : p.precio;
+        return { ...p, qty, modo, precioVenta, subtotal: precioVenta * qty };
       }).filter(Boolean);
       const totalUnidades = itemsCarrito.reduce((a, i) => a + i.qty, 0);
       const totalPesos = itemsCarrito.reduce((a, i) => a + i.subtotal, 0);
@@ -557,9 +562,9 @@
         setEnviando(true);
         try {
           const itemsBackup = itemsCarrito.map((i) => {
-            const esBulto = i.unidadVenta === "bulto";
-            const unidades = esBulto ? i.qty * (i.unidadesBulto || 1) : i.qty;
-            const nombre = esBulto ? `${i.nombre} (x${i.unidadesBulto})` : i.nombre;
+            const esCaja = i.modo === "caja";
+            const unidades = esCaja ? i.qty * (i.unidadesBulto || 1) : i.qty;
+            const nombre = esCaja ? `${i.nombre} (caja x${i.unidadesBulto})` : i.nombre;
             return { id: i.codigo || String(i.id), n: nombre, c: unidades, p: i.precio, sub: unidades * i.precio, dsc: null };
           });
           if (envio > 0) itemsBackup.push({ id: "ENVIO", n: "Envío", c: 1, p: envio, sub: envio, dsc: null });
@@ -690,8 +695,9 @@
           {/* Detalle de producto */}
           {detalle && (() => {
             const p = detalle;
-            const esBulto = p.unidadVenta === "bulto";
-            const precioPrincipal = esBulto ? p.precio * (p.unidadesBulto || 1) : p.precio;
+            const modo = modos[p.id] || "unidad";
+            const tieneCaja = p.unidadesBulto > 1;
+            const precioSel = modo === "caja" ? p.precio * p.unidadesBulto : p.precio;
             const enCarrito = carrito[p.id] || 0;
             return (
               <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" onClick={() => setDetalle(null)}>
@@ -703,22 +709,40 @@
                   </div>
                   <div className="p-4">
                     <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>{emojiCat(p.cat)} {p.cat}{p.codigo ? ` · ${p.codigo}` : ""}</div>
-                    <h2 className="text-lg font-extrabold mb-2" style={{ fontFamily: "'Syne', sans-serif" }}>{p.nombre}</h2>
-                    <div className="text-2xl font-extrabold" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }}>{fmt(precioPrincipal)}</div>
-                    {esBulto ? (
-                      <div className="text-xs mb-3" style={{ color: TEMA.textoSuave }}>{fmt(p.precio)} c/u · bulto x{p.unidadesBulto}</div>
-                    ) : (p.unidadesBulto > 1 ? (
-                      <div className="text-xs mb-3" style={{ color: TEMA.textoSuave }}>x{p.unidadesBulto}: {fmt(p.precio * p.unidadesBulto)}{p.minCompra > 1 ? ` · mínimo ${p.minCompra}u` : ""}</div>
-                    ) : (p.minCompra > 1 ? (
-                      <div className="text-xs mb-3" style={{ color: TEMA.textoSuave }}>mínimo {p.minCompra} u.</div>
-                    ) : <div className="mb-3" />))}
+                    <h2 className="text-lg font-extrabold mb-3" style={{ fontFamily: "'Syne', sans-serif" }}>{p.nombre}</h2>
+
+                    {tieneCaja ? (
+                      <>
+                        <div className="text-[11px] mb-2 font-medium" style={{ color: TEMA.textoSuave }}>Elegí cómo comprarlo:</div>
+                        <div className="flex gap-2 mb-3">
+                          <button onClick={() => elegirModo(p, "unidad")} className="flex-1 rounded-xl p-2.5 text-center transition active:scale-95" style={{ background: modo === "unidad" ? TEMA.gold : TEMA.bgSoft, color: modo === "unidad" ? TEMA.bg : TEMA.texto, border: `1px solid ${modo === "unidad" ? TEMA.gold : TEMA.borde}` }}>
+                            <div className="text-[11px] font-bold">Por unidad</div>
+                            <div className="text-base font-extrabold" style={{ fontFamily: "'Syne', sans-serif" }}>{fmt(p.precio)}</div>
+                          </button>
+                          <button onClick={() => elegirModo(p, "caja")} className="flex-1 rounded-xl p-2.5 text-center transition active:scale-95" style={{ background: modo === "caja" ? TEMA.gold : TEMA.bgSoft, color: modo === "caja" ? TEMA.bg : TEMA.texto, border: `1px solid ${modo === "caja" ? TEMA.gold : TEMA.borde}` }}>
+                            <div className="text-[11px] font-bold">Caja x{p.unidadesBulto}</div>
+                            <div className="text-base font-extrabold" style={{ fontFamily: "'Syne', sans-serif" }}>{fmt(p.precio * p.unidadesBulto)}</div>
+                          </button>
+                        </div>
+                        {modo === "caja"
+                          ? <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>Cada caja trae {p.unidadesBulto} unidades · {fmt(p.precio)} c/u</div>
+                          : (p.minCompra > 1 ? <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>Mínimo {p.minCompra} unidades</div> : <div className="mb-1" />)}
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-2xl font-extrabold" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }}>{fmt(p.precio)}</div>
+                        {p.minCompra > 1 ? <div className="text-xs mb-3" style={{ color: TEMA.textoSuave }}>mínimo {p.minCompra} u.</div> : <div className="mb-3" />}
+                      </>
+                    )}
+
                     {p.promo && <div className="text-xs mb-3" style={{ color: TEMA.ok }}>Promo: {fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
+
                     {enCarrito === 0 ? (
-                      <button onClick={(e) => agregarConVuelo(p, e)} className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={16} /> Agregar al carrito</button>
+                      <button onClick={(e) => agregarConVuelo(p, e)} className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={16} /> Agregar {modo === "caja" ? "caja" : "al carrito"}</button>
                     ) : (
                       <div className="w-full py-1.5 rounded-xl flex items-center justify-between" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }}>
                         <button onClick={() => quitar(p.id)} aria-label="Quitar uno" className="px-5 py-1.5"><Minus size={18} style={{ color: TEMA.gold }} /></button>
-                        <span className="font-bold">{enCarrito} {esBulto ? (enCarrito === 1 ? "bulto" : "bultos") : "u."}</span>
+                        <span className="font-bold">{enCarrito} {modo === "caja" ? (enCarrito === 1 ? "caja" : "cajas") : "u."}</span>
                         <button onClick={(e) => agregarConVuelo(p, e)} aria-label="Agregar uno" className="px-5 py-1.5"><Plus size={18} style={{ color: TEMA.gold }} /></button>
                       </div>
                     )}
@@ -947,7 +971,11 @@
                       ) : itemsCarrito.map((i) => (
                         <div key={i.id} className="flex items-center gap-3 rounded-xl p-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
                           <div className="w-12 h-12 rounded-lg flex items-center justify-center overflow-hidden shrink-0" style={{ background: TEMA.bgSoft }}>{i.foto ? <img src={i.foto} alt="" className="w-full h-full object-contain" /> : <span className="text-2xl">{emojiCat(i.cat)}</span>}</div>
-                          <div className="flex-1 min-w-0"><div className="text-sm font-medium truncate">{i.nombre}</div><div style={{ color: TEMA.gold }} className="text-sm font-bold">{fmt(i.subtotal)}</div></div>
+                          <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{i.nombre}</div>
+                        <div className="text-[10px]" style={{ color: TEMA.textoSuave }}>{i.modo === "caja" ? `${i.qty} caja${i.qty > 1 ? "s" : ""} × ${i.unidadesBulto}u` : `${i.qty} u.`}</div>
+                        <div style={{ color: TEMA.gold }} className="text-sm font-bold">{fmt(i.subtotal)}</div>
+                      </div>
                           <div className="flex items-center gap-1.5">
                             <button onClick={() => quitar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Minus size={14} /></button>
                             <span className="text-sm font-bold w-5 text-center">{i.qty}</span>
