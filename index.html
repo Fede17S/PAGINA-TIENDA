@@ -450,7 +450,11 @@
                 {p.promo && <div className="text-[11px]" style={{ color: TEMA.ok }}>{fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
               </div>
               {enCarrito === 0 ? (
-                <button onClick={(e) => agregarConVuelo(p, e)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={16} /> Agregar</button>
+                p.unidadesBulto > 1 ? (
+                  <button onClick={() => setDetalle(p)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>📦 Elegir opción</button>
+                ) : (
+                  <button onClick={(e) => agregarConVuelo(p, e)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={16} /> Agregar</button>
+                )
               ) : (
                 <div className="mt-2 w-full py-1 rounded-lg flex items-center justify-between" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }}>
                   <button onClick={() => quitar(p.id)} className="px-3 py-1"><Minus size={16} style={{ color: TEMA.gold }} /></button>
