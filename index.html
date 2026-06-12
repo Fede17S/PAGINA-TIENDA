@@ -143,12 +143,18 @@
       return {
         id: p.id, codigo: p.codigo || "", nombre: p.nombre || "Sin nombre",
         cat: p.categoria || "Sin categoría", precio: precioDeLista(p), foto: p.foto || "", promo,
+        unidadVenta: p.unidad_venta || "unidad",
+        unidadesBulto: p.unidades_bulto || 1,
+        minCompra: p.min_compra || 1,
+        cantDefault: p.cant_default || 1,
       };
     }
     async function fetchProductos(empId) {
-      const rows = await sbGet("productos",
-        "select=id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo" +
-        `&empresa_id=eq.${empId}&order=nombre.asc`);
+      const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo";
+      const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default";
+      let rows;
+      try { rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`); }
+      catch (e) { rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`); }
       return (rows || []).map(mapProducto);
     }
 
@@ -209,6 +215,7 @@
     const MapPin = mkIcon('<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>');
     const Phone = mkIcon('<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>');
     const Gift = mkIcon('<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C9 3 12 8 12 8s3-5 4.5-5a2.5 2.5 0 0 1 0 5"/>');
+    const WhatsApp = ({ size = 20, style, className }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" style={style} className={className}><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm0 18.13c-1.52 0-3.01-.41-4.3-1.18l-.31-.18-3.12.82.83-3.04-.2-.31a8.18 8.18 0 0 1-1.26-4.36c0-4.54 3.7-8.24 8.24-8.24 2.2 0 4.27.86 5.82 2.42a8.18 8.18 0 0 1 2.42 5.83c0 4.54-3.7 8.24-8.24 8.24zm4.52-6.16c-.25-.12-1.47-.72-1.69-.81-.23-.08-.39-.12-.56.12-.17.25-.64.81-.79.97-.14.17-.29.19-.54.06-.25-.12-1.05-.39-1.99-1.23-.74-.66-1.23-1.47-1.38-1.72-.14-.25-.02-.38.11-.51.11-.11.25-.29.37-.43.12-.14.17-.25.25-.41.08-.17.04-.31-.02-.43-.06-.12-.56-1.34-.76-1.84-.2-.48-.41-.42-.56-.43h-.48c-.17 0-.43.06-.66.31-.23.25-.86.84-.86 2.05 0 1.21.89 2.38 1.01 2.54.12.17 1.75 2.67 4.23 3.74.59.26 1.05.41 1.41.52.59.19 1.13.16 1.56.1.48-.07 1.47-.6 1.67-1.18.21-.58.21-1.07.14-1.18-.06-.1-.22-.16-.47-.28z"/></svg>;
 
     // Iconos disponibles para los beneficios
     const ICONOS = { truck: Truck, shield: ShieldCheck, clock: Clock, tag: Tag, store: Store, star: Star, percent: Percent, card: CreditCard, pin: MapPin, phone: Phone, gift: Gift };
@@ -266,6 +273,8 @@
       const [splashFade, setSplashFade] = useState(false);
       const [flyers, setFlyers] = useState([]);
       const cartRef = useRef(null);
+      const [limite, setLimite] = useState(12);
+      const sentinelRef = useRef(null);
       const [slide, setSlide] = useState(0);
 
       // Admin
@@ -336,7 +345,88 @@
         return arr;
       }, [productos, cat, busqueda, orden, soloOfertas]);
 
-      const agregar = (id) => { setCarrito((c) => ({ ...c, [id]: (c[id] || 0) + 1 })); setBump((b) => b + 1); };
+      // Armado de secciones: Ofertas arriba, luego agrupado por categoría
+      const secciones = useMemo(() => {
+        if (cat === "todos" && !soloOfertas) {
+          const ofertas = visibles.filter((p) => p.promo);
+          const resto = visibles.filter((p) => !p.promo);
+          const cats = [];
+          resto.forEach((p) => { if (!cats.includes(p.cat)) cats.push(p.cat); });
+          cats.sort((a, b) => a.localeCompare(b));
+          const secs = [];
+          if (ofertas.length) secs.push({ key: "ofertas", label: "🔥 Ofertas", items: ofertas });
+          cats.forEach((c) => secs.push({ key: c, label: emojiCat(c) + " " + c, items: resto.filter((p) => p.cat === c) }));
+          return secs;
+        }
+        return [{ key: "all", label: null, items: visibles }];
+      }, [visibles, cat, soloOfertas]);
+
+      // Reiniciar la cantidad mostrada cuando cambian los filtros
+      useEffect(() => { setLimite(12); }, [cat, busqueda, soloOfertas, orden, productos]);
+
+      // Scroll infinito: cargar más al acercarse al final
+      useEffect(() => {
+        const node = sentinelRef.current;
+        if (!node) return;
+        const obs = new IntersectionObserver((e) => {
+          if (e[0].isIntersecting) setLimite((l) => l + 12);
+        }, { rootMargin: "500px" });
+        obs.observe(node);
+        return () => obs.disconnect();
+      }, [secciones, limite]);
+
+      // Tarjeta de producto reutilizable
+      const renderCard = (p) => {
+        const enCarrito = carrito[p.id] || 0;
+        const esBulto = p.unidadVenta === "bulto";
+        const precioPrincipal = esBulto ? p.precio * (p.unidadesBulto || 1) : p.precio;
+        return (
+          <div key={p.id} data-prod className="rounded-2xl overflow-hidden flex flex-col transition hover:-translate-y-0.5" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+            <div data-thumb className="relative h-28 flex items-center justify-center" style={{ background: TEMA.bgSoft }}>
+              {p.foto ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain p-1" loading="lazy" /> : <span className="text-5xl">{emojiCat(p.cat)}</span>}
+              {p.promo && <span className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: TEMA.oferta, color: "#fff" }}>PROMO</span>}
+            </div>
+            <div className="p-3 flex flex-col flex-1">
+              <h3 className="text-sm font-medium leading-snug mb-1 line-clamp-2">{p.nombre}</h3>
+              <div className="mt-auto">
+                <div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.texto }} className="text-lg font-extrabold">{fmt(precioPrincipal)}</div>
+                {esBulto ? (
+                  <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>{fmt(p.precio)} c/u · bulto x{p.unidadesBulto}</div>
+                ) : (p.unidadesBulto > 1 ? (
+                  <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>x{p.unidadesBulto}: {fmt(p.precio * p.unidadesBulto)}{p.minCompra > 1 ? ` · mín. ${p.minCompra}u` : ""}</div>
+                ) : (p.minCompra > 1 ? (
+                  <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>mínimo {p.minCompra} u.</div>
+                ) : null))}
+                {p.promo && <div className="text-[11px]" style={{ color: TEMA.ok }}>{fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
+              </div>
+              {enCarrito === 0 ? (
+                <button onClick={(e) => agregarConVuelo(p, e)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={16} /> Agregar</button>
+              ) : (
+                <div className="mt-2 w-full py-1 rounded-lg flex items-center justify-between" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }}>
+                  <button onClick={() => quitar(p.id)} className="px-3 py-1"><Minus size={16} style={{ color: TEMA.gold }} /></button>
+                  <span className="font-bold text-sm">{enCarrito}</span>
+                  <button onClick={(e) => agregarConVuelo(p, e)} className="px-3 py-1"><Plus size={16} style={{ color: TEMA.gold }} /></button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      };
+
+      const prodById = (id) => productos.find((x) => String(x.id) === String(id));
+      const precioVentaDe = (p) => p.unidadVenta === "bulto" ? p.precio * (p.unidadesBulto || 1) : p.precio;
+      const qtyInicialDe = (p) => p.unidadVenta === "bulto" ? Math.max(1, p.cantDefault || 1) : Math.max(p.minCompra || 1, p.cantDefault || 1);
+      const minDe = (p) => p.unidadVenta === "bulto" ? 1 : (p.minCompra || 1);
+
+      const agregar = (id) => {
+        const p = prodById(id);
+        setCarrito((c) => {
+          const actual = c[id] || 0;
+          const nueva = actual === 0 ? (p ? qtyInicialDe(p) : 1) : actual + 1;
+          return { ...c, [id]: nueva };
+        });
+        setBump((b) => b + 1);
+      };
       const agregarConVuelo = (p, e) => {
         try {
           const card = e.currentTarget.closest("[data-prod]");
@@ -356,13 +446,28 @@
         } catch (err) { /* si algo falla, igual agrega */ }
         agregar(p.id);
       };
-      const quitar = (id) => setCarrito((c) => { const n = (c[id] || 0) - 1; const cp = { ...c }; if (n <= 0) delete cp[id]; else cp[id] = n; return cp; });
+      const quitar = (id) => {
+        const p = prodById(id);
+        setCarrito((c) => {
+          const actual = c[id] || 0;
+          const min = p ? minDe(p) : 1;
+          const nueva = actual - 1;
+          const cp = { ...c };
+          if (nueva < min) delete cp[id]; else cp[id] = nueva;
+          return cp;
+        });
+      };
       const eliminar = (id) => setCarrito((c) => { const cp = { ...c }; delete cp[id]; return cp; });
       const vaciar = () => setCarrito({});
 
-      const itemsCarrito = Object.entries(carrito).map(([id, qty]) => ({ ...productos.find((p) => String(p.id) === String(id)), qty })).filter((i) => i.id !== undefined);
+      const itemsCarrito = Object.entries(carrito).map(([id, qty]) => {
+        const p = productos.find((x) => String(x.id) === String(id));
+        if (!p) return null;
+        const precioVenta = precioVentaDe(p);
+        return { ...p, qty, precioVenta, subtotal: precioVenta * qty };
+      }).filter(Boolean);
       const totalUnidades = itemsCarrito.reduce((a, i) => a + i.qty, 0);
-      const totalPesos = itemsCarrito.reduce((a, i) => a + i.precio * i.qty, 0);
+      const totalPesos = itemsCarrito.reduce((a, i) => a + i.subtotal, 0);
       // ── Reglas de compra y envío ──
       const compraMinima = cfg.compraMinima || 0;
       const envioGratisDesde = cfg.envioGratisDesde || 0;
@@ -395,10 +500,12 @@
         if (!cumpleMinimo) { alert(`La compra mínima es ${fmt(compraMinima)}. Te faltan ${fmt(faltaMinimo)}.`); return; }
         setEnviando(true);
         try {
-          const itemsBackup = itemsCarrito.map((i) => ({
-            id: i.codigo || String(i.id),
-            n: i.nombre, c: i.qty, p: i.precio, sub: i.precio * i.qty, dsc: null,
-          }));
+          const itemsBackup = itemsCarrito.map((i) => {
+            const esBulto = i.unidadVenta === "bulto";
+            const unidades = esBulto ? i.qty * (i.unidadesBulto || 1) : i.qty;
+            const nombre = esBulto ? `${i.nombre} (x${i.unidadesBulto})` : i.nombre;
+            return { id: i.codigo || String(i.id), n: nombre, c: unidades, p: i.precio, sub: unidades * i.precio, dsc: null };
+          });
           if (envio > 0) itemsBackup.push({ id: "ENVIO", n: "Envío", c: 1, p: envio, sub: envio, dsc: null });
           const obsParts = ["📱 Pedido por tienda online"];
           if (cliTel.trim()) obsParts.push("Tel: " + cliTel.trim());
@@ -433,6 +540,14 @@
       // Cierra el carrito y resetea todo el flujo
       const cerrarCarrito = () => { setCarritoAbierto(false); setTimeout(() => setPaso("carrito"), 200); };
       const nuevoPedido = () => { setCarrito({}); setCliNom(""); setCliTel(""); setCliDir(""); setPaso("carrito"); setCarritoAbierto(false); };
+      const avisarWhatsApp = () => {
+        const lineas = itemsCarrito.map((i) => `• ${i.qty}x ${i.nombre} — ${fmt(i.subtotal)}`).join("\n");
+        const extra = envio > 0 ? `\nEnvío: ${fmt(envio)}` : "";
+        const datos = `Cliente: ${cliNom}` + (cliTel ? `\nTel: ${cliTel}` : "") + (cliDir ? `\nDirección: ${cliDir}` : "");
+        const msg = `🛒 *Nuevo pedido por la tienda*\n\n${datos}\n\n${lineas}${extra}\n\n*Total: ${fmt(totalFinal)}*`;
+        const num = (cfg.whatsapp || "").replace(/[^0-9]/g, "");
+        window.open(`https://wa.me/${num}?text=${encodeURIComponent(msg)}`, "_blank");
+      };
 
       /* ---- Admin ---- */
       const abrirAdmin = () => { if (adminOk) { setEditCfg(JSON.parse(JSON.stringify(cfg))); setEditorOpen(true); } else { setLoginOpen(true); setLoginErr(""); } };
@@ -605,35 +720,32 @@
             ) : visibles.length === 0 ? (
               <div className="mt-12 text-center flex flex-col items-center gap-2" style={{ color: TEMA.textoSuave }}><PackageX size={40} /><p>No hay productos para mostrar.</p></div>
             ) : (
-              <section className="mt-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                {visibles.map((p) => {
-                  const enCarrito = carrito[p.id] || 0;
-                  return (
-                    <div key={p.id} data-prod className="rounded-2xl overflow-hidden flex flex-col transition hover:-translate-y-0.5" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
-                      <div data-thumb className="relative h-28 flex items-center justify-center" style={{ background: TEMA.bgSoft }}>
-                        {p.foto ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain p-1" loading="lazy" /> : <span className="text-5xl">{emojiCat(p.cat)}</span>}
-                        {p.promo && <span className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: TEMA.oferta, color: "#fff" }}>PROMO</span>}
-                      </div>
-                      <div className="p-3 flex flex-col flex-1">
-                        <h3 className="text-sm font-medium leading-snug mb-1 line-clamp-2">{p.nombre}</h3>
-                        <div className="mt-auto">
-                          <div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-lg font-extrabold">{fmt(p.precio)}</div>
-                          {p.promo && <div className="text-[11px]" style={{ color: TEMA.ok }}>{fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
+              <div className="mt-4">
+                {(() => {
+                  let restantes = limite;
+                  const out = [];
+                  for (const sec of secciones) {
+                    if (restantes <= 0) break;
+                    const itemsMostrar = sec.items.slice(0, restantes);
+                    if (!itemsMostrar.length) continue;
+                    restantes -= itemsMostrar.length;
+                    out.push(
+                      <section key={sec.key} className="mb-5">
+                        {sec.label && <h2 className="text-base font-extrabold mb-2 px-0.5" style={{ color: sec.key === "ofertas" ? TEMA.oferta : TEMA.gold, fontFamily: "'Syne', sans-serif" }}>{sec.label}</h2>}
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                          {itemsMostrar.map(renderCard)}
                         </div>
-                        {enCarrito === 0 ? (
-                          <button onClick={(e) => agregarConVuelo(p, e)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={16} /> Agregar</button>
-                        ) : (
-                          <div className="mt-2 w-full py-1 rounded-lg flex items-center justify-between" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }}>
-                            <button onClick={() => quitar(p.id)} className="px-3 py-1"><Minus size={16} style={{ color: TEMA.gold }} /></button>
-                            <span className="font-bold text-sm">{enCarrito}</span>
-                            <button onClick={(e) => agregarConVuelo(p, e)} className="px-3 py-1"><Plus size={16} style={{ color: TEMA.gold }} /></button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </section>
+                      </section>
+                    );
+                  }
+                  return out;
+                })()}
+                {limite < visibles.length && (
+                  <div ref={sentinelRef} className="py-6 flex items-center justify-center gap-2 text-sm" style={{ color: TEMA.textoSuave }}>
+                    <span className="spinner" style={{ width: 18, height: 18 }} /> Cargando más productos…
+                  </div>
+                )}
+              </div>
             )}
           </main>
 
@@ -672,7 +784,10 @@
                 <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>{totalUnidades} productos{envio > 0 ? " + envío" : ""} · Total</div>
                 <div className="text-3xl font-extrabold" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }}>{fmt(totalFinal)}</div>
               </div>
-              <button onClick={nuevoPedido} className="title-pop w-full max-w-xs py-3.5 rounded-xl font-bold transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>Seguir comprando</button>
+              <div className="title-pop w-full max-w-xs space-y-2">
+                <button onClick={avisarWhatsApp} className="w-full py-3.5 rounded-xl font-bold transition active:scale-95 flex items-center justify-center gap-2" style={{ background: "#25D366", color: "#053d27" }}><WhatsApp size={20} /> Avisar a la empresa</button>
+                <button onClick={nuevoPedido} className="w-full py-3 rounded-xl font-bold transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.texto }}>Seguir comprando</button>
+              </div>
             </div>
           )}
 
@@ -706,7 +821,7 @@
                       ) : itemsCarrito.map((i) => (
                         <div key={i.id} className="flex items-center gap-3 rounded-xl p-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
                           <div className="w-12 h-12 rounded-lg flex items-center justify-center overflow-hidden shrink-0" style={{ background: TEMA.bgSoft }}>{i.foto ? <img src={i.foto} alt="" className="w-full h-full object-contain" /> : <span className="text-2xl">{emojiCat(i.cat)}</span>}</div>
-                          <div className="flex-1 min-w-0"><div className="text-sm font-medium truncate">{i.nombre}</div><div style={{ color: TEMA.gold }} className="text-sm font-bold">{fmt(i.precio * i.qty)}</div></div>
+                          <div className="flex-1 min-w-0"><div className="text-sm font-medium truncate">{i.nombre}</div><div style={{ color: TEMA.gold }} className="text-sm font-bold">{fmt(i.subtotal)}</div></div>
                           <div className="flex items-center gap-1.5">
                             <button onClick={() => quitar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Minus size={14} /></button>
                             <span className="text-sm font-bold w-5 text-center">{i.qty}</span>
@@ -751,7 +866,7 @@
                           {itemsCarrito.map((i) => (
                             <div key={i.id} className="flex items-center justify-between px-3 py-2" style={{ borderColor: TEMA.borde }}>
                               <span className="text-sm truncate mr-2"><span style={{ color: TEMA.gold }} className="font-bold">{i.qty}×</span> {i.nombre}</span>
-                              <span className="text-sm font-medium shrink-0">{fmt(i.precio * i.qty)}</span>
+                              <span className="text-sm font-medium shrink-0">{fmt(i.subtotal)}</span>
                             </div>
                           ))}
                           {envio > 0 && (
