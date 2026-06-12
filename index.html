@@ -13,6 +13,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
     body { margin: 0; background: #0a1628; }
+    /* Evita el auto-zoom de iOS al enfocar campos (necesita >=16px) */
+    input, textarea, select { font-size: 16px !important; }
     ::-webkit-scrollbar { height: 6px; width: 6px; }
     ::-webkit-scrollbar-thumb { background: #1e3a5f; border-radius: 99px; }
 
@@ -84,7 +86,7 @@
         { icon: "clock",  t: "Entrega 24/48h",   s: "En toda la zona" },
       ],
       banners: [
-        { emoji: "🏷️", titulo: "Ofertas de la semana", subtitulo: "Aprovechá los precios promocionales", cta: "Ver promos" },
+        { emoji: "🏷️", titulo: "Ofertas de la semana", subtitulo: "Aprovechá los precios promocionales", cta: "Ver promos", accion: "ofertas" },
         { emoji: "🚚", titulo: "Envío gratis",          subtitulo: "En compras grandes",                cta: "Empezar" },
         { emoji: "📦", titulo: "Catálogo completo",      subtitulo: "Todos nuestros productos",          cta: "Explorar" },
       ],
@@ -379,6 +381,27 @@
         window.addEventListener("scroll", onScroll, { passive: true });
         return () => window.removeEventListener("scroll", onScroll);
       }, []);
+
+      // Bloquear scroll del fondo cuando hay un panel abierto (evita que se mueva todo en iOS)
+      useEffect(() => {
+        const abierto = carritoAbierto || !!detalle || loginOpen || editorOpen;
+        if (!abierto) return;
+        const scrollY = window.scrollY;
+        const b = document.body;
+        b.style.position = "fixed";
+        b.style.top = `-${scrollY}px`;
+        b.style.left = "0";
+        b.style.right = "0";
+        b.style.width = "100%";
+        return () => {
+          b.style.position = "";
+          b.style.top = "";
+          b.style.left = "";
+          b.style.right = "";
+          b.style.width = "";
+          window.scrollTo(0, scrollY);
+        };
+      }, [carritoAbierto, detalle, loginOpen, editorOpen]);
       const scrollArriba = () => window.scrollTo({ top: 0, behavior: "smooth" });
       const irACategoria = (c) => {
         setCat(c);
@@ -387,6 +410,16 @@
         }, 60);
       };
       const limpiarFiltros = () => { setCat("todos"); setBusqueda(""); setSoloOfertas(false); };
+      const scrollAGrid = () => { if (catBarRef.current) window.scrollTo({ top: Math.max(0, catBarRef.current.offsetTop - 70), behavior: "smooth" }); };
+      const accionBanner = (b) => {
+        const acc = b.accion || "ofertas";
+        if (acc === "nada") return;
+        if (acc === "link" && b.accionUrl) { window.open(b.accionUrl, "_blank"); return; }
+        if (acc === "categoria" && b.accionCat) { setSoloOfertas(false); irACategoria(b.accionCat); return; }
+        // por defecto: mostrar ofertas
+        setSoloOfertas(true); setCat("todos"); setBusqueda("");
+        setTimeout(scrollAGrid, 60);
+      };
 
       useEffect(() => {
         const t = setInterval(() => setSlide((s) => (s + 1) % (cfg.banners.length || 1)), 5000);
@@ -673,7 +706,7 @@
       const addBenef = () => setEditCfg((c) => ({ ...c, beneficios: [...c.beneficios, { icon: "star", t: "Nuevo beneficio", s: "Descripción" }] }));
       const delBenef = (i) => setEditCfg((c) => ({ ...c, beneficios: c.beneficios.filter((_, j) => j !== i) }));
       const setBan = (i, k, v) => setEditCfg((c) => { const b = [...c.banners]; b[i] = { ...b[i], [k]: v }; return { ...c, banners: b }; });
-      const addBan = () => setEditCfg((c) => ({ ...c, banners: [...c.banners, { emoji: "✨", titulo: "Nuevo banner", subtitulo: "Subtítulo", cta: "Ver" }] }));
+      const addBan = () => setEditCfg((c) => ({ ...c, banners: [...c.banners, { emoji: "✨", titulo: "Nuevo banner", subtitulo: "Subtítulo", cta: "Ver", accion: "ofertas" }] }));
       const delBan = (i) => setEditCfg((c) => ({ ...c, banners: c.banners.filter((_, j) => j !== i) }));
       const moverCat = (i, dir) => setEditCfg((c) => {
         const arr = [...(c.ordenCategorias || [])];
@@ -854,7 +887,7 @@
                       <div className="text-4xl mb-2">{b.emoji}</div>
                       <h2 style={{ fontFamily: "'Syne', sans-serif" }} className="text-2xl sm:text-3xl font-extrabold mb-1">{b.titulo}</h2>
                       <p style={{ color: TEMA.textoSuave }} className="text-sm mb-3">{b.subtitulo}</p>
-                      {b.cta && <button className="px-4 py-2 rounded-lg text-sm font-bold" style={{ background: TEMA.gold, color: TEMA.bg }}>{b.cta}</button>}
+                      {b.cta && <button onClick={() => accionBanner(b)} className="px-4 py-2 rounded-lg text-sm font-bold transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>{b.cta}</button>}
                     </div>
                   </div>
                 ))}
@@ -1254,6 +1287,21 @@
                           <input value={b.titulo} onChange={(e) => setBan(i, "titulo", e.target.value)} placeholder="Título" className={inputCls} style={inputStyle} />
                           <input value={b.subtitulo} onChange={(e) => setBan(i, "subtitulo", e.target.value)} placeholder="Subtítulo" className={inputCls} style={inputStyle} />
                           <input value={b.cta} onChange={(e) => setBan(i, "cta", e.target.value)} placeholder="Texto del botón" className={inputCls} style={inputStyle} />
+                          <select value={b.accion || "ofertas"} onChange={(e) => setBan(i, "accion", e.target.value)} className={inputCls} style={inputStyle}>
+                            <option value="ofertas">Al tocar: mostrar ofertas</option>
+                            <option value="categoria">Al tocar: ir a una categoría</option>
+                            <option value="link">Al tocar: abrir un link</option>
+                            <option value="nada">Al tocar: no hacer nada</option>
+                          </select>
+                          {b.accion === "categoria" && (
+                            <select value={b.accionCat || ""} onChange={(e) => setBan(i, "accionCat", e.target.value)} className={inputCls} style={inputStyle}>
+                              <option value="">— Elegí categoría —</option>
+                              {categorias.filter((c) => c !== "todos").map((c) => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          )}
+                          {b.accion === "link" && (
+                            <input value={b.accionUrl || ""} onChange={(e) => setBan(i, "accionUrl", e.target.value)} placeholder="https://…" className={inputCls} style={inputStyle} />
+                          )}
                         </div>
                         <button onClick={() => delBan(i)} className="p-1.5 mt-1"><Trash2 size={16} style={{ color: TEMA.oferta }} /></button>
                       </div>
