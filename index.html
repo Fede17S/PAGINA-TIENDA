@@ -76,6 +76,7 @@
       compraMinima: 0,            // 0 = sin mínimo. Si >0, no deja comprar por debajo.
       envioGratisDesde: 50000,    // 0 = no aplica envío gratis por monto
       costoEnvio: 0,              // tarifa si no llega al envío gratis. 0 = sin cargo
+      ordenCategorias: [],        // orden manual de categorías (vacío = alfabético)
       beneficios: [
         { icon: "truck",  t: "Envío gratis",     s: "Desde $50.000" },
         { icon: "shield", t: "Compra segura",    s: "Pago protegido" },
@@ -165,6 +166,7 @@
         ...CFG_DEFAULT, ...saved,
         beneficios: Array.isArray(saved.beneficios) ? saved.beneficios : CFG_DEFAULT.beneficios,
         banners: Array.isArray(saved.banners) ? saved.banners : CFG_DEFAULT.banners,
+        ordenCategorias: Array.isArray(saved.ordenCategorias) ? saved.ordenCategorias : [],
       };
     }
 
@@ -325,12 +327,21 @@
       const nombreTienda = cfg.nombre || empresa?.nombre || "Mi Tienda";
       const logoEmpresa = empresa?.logo || "";
 
+      const cmpCat = useMemo(() => {
+        const orden = cfg.ordenCategorias || [];
+        return (a, b) => {
+          const ia = orden.indexOf(a), ib = orden.indexOf(b);
+          const ra = ia === -1 ? 9999 : ia, rb = ib === -1 ? 9999 : ib;
+          return ra !== rb ? ra - rb : a.localeCompare(b);
+        };
+      }, [cfg.ordenCategorias]);
+
       const categorias = useMemo(() => {
         const set = [];
         productos.forEach((p) => { if (!set.includes(p.cat)) set.push(p.cat); });
-        set.sort((a, b) => a.localeCompare(b));
+        set.sort(cmpCat);
         return ["todos", ...set];
-      }, [productos]);
+      }, [productos, cmpCat]);
 
       const visibles = useMemo(() => {
         let arr = productos.filter((p) => {
@@ -352,14 +363,14 @@
           const resto = visibles.filter((p) => !p.promo);
           const cats = [];
           resto.forEach((p) => { if (!cats.includes(p.cat)) cats.push(p.cat); });
-          cats.sort((a, b) => a.localeCompare(b));
+          cats.sort(cmpCat);
           const secs = [];
           if (ofertas.length) secs.push({ key: "ofertas", label: "🔥 Ofertas", items: ofertas });
           cats.forEach((c) => secs.push({ key: c, label: emojiCat(c) + " " + c, items: resto.filter((p) => p.cat === c) }));
           return secs;
         }
         return [{ key: "all", label: null, items: visibles }];
-      }, [visibles, cat, soloOfertas]);
+      }, [visibles, cat, soloOfertas, cmpCat]);
 
       // Reiniciar la cantidad mostrada cuando cambian los filtros
       useEffect(() => { setLimite(12); }, [cat, busqueda, soloOfertas, orden, productos]);
@@ -550,13 +561,21 @@
       };
 
       /* ---- Admin ---- */
-      const abrirAdmin = () => { if (adminOk) { setEditCfg(JSON.parse(JSON.stringify(cfg))); setEditorOpen(true); } else { setLoginOpen(true); setLoginErr(""); } };
+      const cfgParaEditar = () => {
+        const clon = JSON.parse(JSON.stringify(cfg));
+        const reales = categorias.filter((c) => c !== "todos");
+        const ord = (clon.ordenCategorias || []).filter((c) => reales.includes(c));
+        reales.forEach((c) => { if (!ord.includes(c)) ord.push(c); });
+        clon.ordenCategorias = ord;
+        return clon;
+      };
+      const abrirAdmin = () => { if (adminOk) { setEditCfg(cfgParaEditar()); setEditorOpen(true); } else { setLoginOpen(true); setLoginErr(""); } };
       const hacerLogin = async () => {
         if (!empresa) return;
         setLoginCargando(true); setLoginErr("");
         try {
           const ok = await validarAdmin(empresa.id, loginUid.trim(), loginPass);
-          if (ok) { setAdminOk(true); setLoginOpen(false); setLoginPass(""); setEditCfg(JSON.parse(JSON.stringify(cfg))); setEditorOpen(true); }
+          if (ok) { setAdminOk(true); setLoginOpen(false); setLoginPass(""); setEditCfg(cfgParaEditar()); setEditorOpen(true); }
           else setLoginErr("Usuario o contraseña incorrectos.");
         } catch (e) { setLoginErr("Error: " + e.message); }
         finally { setLoginCargando(false); }
@@ -570,6 +589,13 @@
       const setBan = (i, k, v) => setEditCfg((c) => { const b = [...c.banners]; b[i] = { ...b[i], [k]: v }; return { ...c, banners: b }; });
       const addBan = () => setEditCfg((c) => ({ ...c, banners: [...c.banners, { emoji: "✨", titulo: "Nuevo banner", subtitulo: "Subtítulo", cta: "Ver" }] }));
       const delBan = (i) => setEditCfg((c) => ({ ...c, banners: c.banners.filter((_, j) => j !== i) }));
+      const moverCat = (i, dir) => setEditCfg((c) => {
+        const arr = [...(c.ordenCategorias || [])];
+        const j = i + dir;
+        if (j < 0 || j >= arr.length) return c;
+        const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+        return { ...c, ordenCategorias: arr };
+      });
 
       const guardar = async () => {
         if (!empresa) return;
@@ -979,6 +1005,26 @@
                       );
                     })}
                   </div>
+                </div>
+
+                {/* ORDEN DE CATEGORÍAS */}
+                <div>
+                  <h3 className="text-sm font-bold mb-1" style={{ color: TEMA.gold }}>Orden de categorías</h3>
+                  <p className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>Definí en qué orden se muestran en la tienda. Las "Ofertas" siempre van primero.</p>
+                  {(!editCfg.ordenCategorias || editCfg.ordenCategorias.length === 0) ? (
+                    <p className="text-xs" style={{ color: TEMA.textoSuave }}>No hay categorías cargadas todavía.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {editCfg.ordenCategorias.map((c, i) => (
+                        <div key={c} className="rounded-xl px-3 py-2 flex items-center gap-2" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+                          <span className="text-xs font-bold w-5 text-center" style={{ color: TEMA.textoSuave }}>{i + 1}</span>
+                          <span className="text-sm flex-1 truncate">{emojiCat(c)} {c}</span>
+                          <button onClick={() => moverCat(i, -1)} disabled={i === 0} className="p-1.5 rounded" style={{ background: TEMA.bgSoft, opacity: i === 0 ? .3 : 1 }}><ChevronRight size={16} style={{ transform: "rotate(-90deg)", color: TEMA.gold }} /></button>
+                          <button onClick={() => moverCat(i, 1)} disabled={i === editCfg.ordenCategorias.length - 1} className="p-1.5 rounded" style={{ background: TEMA.bgSoft, opacity: i === editCfg.ordenCategorias.length - 1 ? .3 : 1 }}><ChevronRight size={16} style={{ transform: "rotate(90deg)", color: TEMA.gold }} /></button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* BANNERS */}
