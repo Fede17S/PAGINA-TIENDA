@@ -287,6 +287,7 @@
 
       const [cat, setCat] = useState("todos");
       const [busqueda, setBusqueda] = useState("");
+      const [buscFocus, setBuscFocus] = useState(false);
       const [orden, setOrden] = useState("relevancia");
       const [soloOfertas, setSoloOfertas] = useState(false);
       const [carrito, setCarrito] = useState({});
@@ -720,12 +721,41 @@
           {/* Globitos volando al carrito */}
           {flyers.map((f) => <Flyer key={f.id} f={f} onDone={() => setFlyers((arr) => arr.filter((x) => x.id !== f.id))} />)}
 
-          {/* Botón volver arriba */}
+          {/* Botón volver arriba (en móvil sube para no tapar el buscador flotante) */}
           {showTop && (
-            <button onClick={scrollArriba} aria-label="Volver arriba" className="fixed bottom-5 right-4 z-30 p-3 rounded-full transition active:scale-90" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.gold, boxShadow: "0 6px 20px #00000066" }}>
+            <button onClick={scrollArriba} aria-label="Volver arriba" className="fixed bottom-24 md:bottom-5 right-4 z-30 p-3 rounded-full transition active:scale-90" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.gold, boxShadow: "0 6px 20px #00000066" }}>
               <ChevronRight size={20} style={{ transform: "rotate(-90deg)" }} />
             </button>
           )}
+
+          {/* Buscador flotante (solo móvil) — acompaña el scroll */}
+          <div className="fixed bottom-4 left-0 right-0 px-4 z-30 md:hidden">
+            <div className="max-w-md mx-auto flex items-center rounded-full pl-1 pr-1 transition-all duration-300"
+              style={{
+                background: TEMA.bgCard + "f2",
+                backdropFilter: "blur(10px)",
+                WebkitBackdropFilter: "blur(10px)",
+                border: `1px solid ${buscFocus ? TEMA.gold : TEMA.borde}`,
+                boxShadow: buscFocus ? `0 12px 32px #000000aa, 0 0 0 3px ${TEMA.gold}22` : "0 8px 24px #00000077",
+              }}>
+              <Search size={18} className="ml-3 shrink-0 transition-colors" style={{ color: buscFocus ? TEMA.gold : TEMA.textoSuave }} />
+              <input
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                onFocus={() => setBuscFocus(true)}
+                onBlur={() => setBuscFocus(false)}
+                placeholder="Buscar productos…"
+                aria-label="Buscar productos"
+                className="w-full py-3 px-3 bg-transparent outline-none text-sm font-medium"
+                style={{ color: TEMA.texto }}
+              />
+              {busqueda && (
+                <button onClick={() => setBusqueda("")} aria-label="Limpiar búsqueda" className="mr-1.5 p-1.5 rounded-full shrink-0" style={{ background: TEMA.bgSoft }}>
+                  <X size={15} style={{ color: TEMA.textoSuave }} />
+                </button>
+              )}
+            </div>
+          </div>
 
           {/* Detalle de producto */}
           {detalle && (() => {
@@ -797,7 +827,8 @@
                   <div style={{ color: TEMA.textoSuave }} className="text-[11px] hidden sm:block">{cfg.tagline}</div>
                 </div>
               </div>
-              <div className="flex-1 relative">
+              <div className="flex-1 md:hidden"></div>
+              <div className="flex-1 relative hidden md:block">
                 <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: TEMA.textoSuave }} />
                 <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar productos…" aria-label="Buscar productos"
                   className="w-full pl-10 pr-9 py-2 rounded-xl text-sm outline-none" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.texto }} />
@@ -932,6 +963,8 @@
                 )}
               </div>
             )}
+            {/* Espacio para que el buscador flotante no tape el último producto (solo móvil) */}
+            <div className="h-24 md:hidden" />
           </main>
 
           {/* CARRITO / CHECKOUT */}
