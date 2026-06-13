@@ -45,6 +45,8 @@
     @keyframes splashIn { from{opacity:0;transform:scale(.85)} to{opacity:1;transform:scale(1)} }
     .splash-in { animation: splashIn .5s cubic-bezier(.18,.9,.32,1.2) both; }
     @keyframes softFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+    @keyframes floatUp { 0%{transform:translateY(20px) scale(.6);opacity:0} 15%{opacity:.85} 85%{opacity:.85} 100%{transform:translateY(-130px) scale(1);opacity:0} }
+    .pcl { position:absolute; bottom:-12px; border-radius:50%; pointer-events:none; animation:floatUp linear infinite; }
     .soft-float { animation: softFloat 2.4s ease-in-out infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .spinner { border-radius:50%; border:3px solid #1e3a5f; border-top-color:#c9933a; animation: spin .8s linear infinite; }
@@ -165,13 +167,61 @@
         return (rows || []).map((l) => ({ key: l.lista_key, nombre: l.nombre || l.lista_key }));
       } catch (e) { return []; }
     }
+    // ── Caché de catálogo en IndexedDB (reduce egress: no re-baja fotos en cada visita) ──
+    let _idbDB = null;
+    function idbOpen() {
+      return new Promise((res) => {
+        if (_idbDB) return res(_idbDB);
+        try {
+          const rq = indexedDB.open("tienda_cache", 1);
+          rq.onupgradeneeded = (e) => { const db = e.target.result; if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv"); };
+          rq.onsuccess = (e) => { _idbDB = e.target.result; res(_idbDB); };
+          rq.onerror = () => res(null);
+        } catch (e) { res(null); }
+      });
+    }
+    function idbGet(key) {
+      return idbOpen().then((db) => {
+        if (!db) return null;
+        return new Promise((res) => {
+          try { const rq = db.transaction("kv", "readonly").objectStore("kv").get(key); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => res(null); }
+          catch (e) { res(null); }
+        });
+      });
+    }
+    function idbSet(key, val) {
+      return idbOpen().then((db) => {
+        if (!db) return;
+        return new Promise((res) => {
+          try { const rq = db.transaction("kv", "readwrite").objectStore("kv").put(val, key); rq.onsuccess = () => res(); rq.onerror = () => res(); }
+          catch (e) { res(); }
+        });
+      });
+    }
+    async function fetchCatVer(empId) {
+      try { const r = await sbGet("empresas", `select=cat_ver&id=eq.${empId}`); return (r && r[0]) ? r[0].cat_ver : null; }
+      catch (e) { return null; }
+    }
+
     async function fetchProductos(empId) {
+      const ckey = "tienda_prod_" + empId;
+      const ver = await fetchCatVer(empId);
+      // Si el catálogo no cambió, usar la copia local (NO baja fotos => ahorra egress)
+      if (ver) {
+        try { const cc = await idbGet(ckey); if (cc && cc.ver === ver && cc.data) return cc.data; } catch (e) {}
+      }
       const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo";
       const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default";
       let rows;
       try { rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`); }
       catch (e) { rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`); }
-      return (rows || []).map(mapProducto);
+      if (!rows) {
+        try { const c2 = await idbGet(ckey); if (c2 && c2.data) return c2.data; } catch (e) {}
+        return [];
+      }
+      const prods = rows.map(mapProducto);
+      try { await idbSet(ckey, { ver, ts: Date.now(), data: prods }); } catch (e) {}
+      return prods;
     }
 
     // Mezcla la config guardada con los defaults (por si faltan claves)
@@ -261,6 +311,34 @@
               {f.foto ? <img src={f.foto} alt="" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <span style={{ fontSize: 26 }}>{f.emoji}</span>}
             </div>
           </div>
+        </div>
+      );
+    }
+
+    /* Partículas/destellos dorados flotando suave (fondo del login) */
+    function Particulas({ cantidad = 26 }) {
+      const items = useMemo(() => Array.from({ length: cantidad }).map(() => {
+        const sz = 3 + Math.random() * 7;
+        return {
+          left: Math.random() * 100,
+          size: sz,
+          dur: 7 + Math.random() * 7,
+          delay: -Math.random() * 12,
+          op: 0.25 + Math.random() * 0.45,
+          gold: Math.random() > 0.45,
+        };
+      }), [cantidad]);
+      return (
+        <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
+          {items.map((p, i) => (
+            <span key={i} className="pcl" style={{
+              left: p.left + "%", width: p.size, height: p.size,
+              background: p.gold ? "#c9933a" : "#e0b35e",
+              opacity: p.op,
+              boxShadow: `0 0 ${p.size * 2}px ${p.gold ? "#c9933a" : "#e0b35e"}`,
+              animationDuration: p.dur + "s", animationDelay: p.delay + "s",
+            }} />
+          ))}
         </div>
       );
     }
@@ -1164,8 +1242,9 @@
 
           {/* MODAL LOGIN ADMIN */}
           {loginOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "#000000aa" }} onClick={() => setLoginOpen(false)}>
-              <div className="w-full max-w-xs rounded-2xl p-5" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }} onClick={(e) => e.stopPropagation()}>
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-hidden" style={{ background: `radial-gradient(circle at 50% 35%, #13294b 0%, ${TEMA.bg} 70%)` }} onClick={() => setLoginOpen(false)}>
+              <Particulas cantidad={30} />
+              <div className="relative z-10 w-full max-w-xs rounded-2xl p-5" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, boxShadow: "0 20px 60px #00000088" }} onClick={(e) => e.stopPropagation()}>
                 <div className="flex items-center gap-2 mb-1"><Settings size={20} style={{ color: TEMA.gold }} /><h2 style={{ fontFamily: "'Syne', sans-serif" }} className="font-extrabold text-lg">Administrar tienda</h2></div>
                 <p className="text-xs mb-4" style={{ color: TEMA.textoSuave }}>Ingresá con tu usuario admin de la empresa.</p>
                 <input value={loginUid} onChange={(e) => setLoginUid(e.target.value)} placeholder="Usuario" className={inputCls + " mb-2"} style={inputStyle} />
