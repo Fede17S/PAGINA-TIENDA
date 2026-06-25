@@ -263,7 +263,7 @@
     // Devuelve un array de IDs de producto ordenados por cantidad de veces pedidos.
     async function fetchMasVendidos(empId) {
       try {
-        const rows = await sbGet("backup_pedidos", `select=items&empresa_id=eq.${empId}&order=fecha.desc&limit=200`);
+        const rows = await sbGet("backup_pedidos", `select=items&empresa_id=eq.${empId}&order=fecha.desc&limit=1000`);
         if (!rows || !rows.length) return [];
         const conteo = {};
         rows.forEach((ped) => {
