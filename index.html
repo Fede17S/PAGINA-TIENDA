@@ -281,6 +281,41 @@
       } catch (e) { return []; }
     }
 
+    // Construye el mapa de "comprados juntos": para cada producto, qué otros
+    // aparecen en los mismos pedidos y cuántas veces. Devuelve { idProd: [idsSugeridos...] }.
+    async function fetchCompradosJuntos(empId) {
+      try {
+        const rows = await sbGet("backup_pedidos", `select=items&empresa_id=eq.${empId}&order=fecha.desc&limit=1000`);
+        if (!rows || !rows.length) return {};
+        const co = {}; // co[a][b] = veces que a y b aparecieron juntos
+        rows.forEach((ped) => {
+          let items = ped.items;
+          if (typeof items === "string") { try { items = JSON.parse(items); } catch (_) { items = []; } }
+          if (!Array.isArray(items)) return;
+          // ids únicos del pedido (sin ENVIO ni repetidos)
+          const ids = [...new Set(items.map((it) => it && it.id != null ? String(it.id) : null).filter((x) => x && x !== "ENVIO"))];
+          for (let i = 0; i < ids.length; i++) {
+            for (let j = 0; j < ids.length; j++) {
+              if (i === j) continue;
+              const a = ids[i], b = ids[j];
+              if (!co[a]) co[a] = {};
+              co[a][b] = (co[a][b] || 0) + 1;
+            }
+          }
+        });
+        // Para cada producto, ordenar sus acompañantes por frecuencia y quedarnos con los top
+        const mapa = {};
+        Object.keys(co).forEach((a) => {
+          mapa[a] = Object.entries(co[a])
+            .filter(([, n]) => n >= 2)               // al menos 2 pedidos juntos (filtra casualidad)
+            .sort((x, y) => y[1] - x[1])
+            .slice(0, 8)
+            .map(([id]) => id);
+        });
+        return mapa;
+      } catch (e) { return {}; }
+    }
+
     // Mezcla la config guardada con los defaults (por si faltan claves)
     function mergeCfg(saved) {
       if (!saved) return { ...CFG_DEFAULT };
@@ -410,6 +445,7 @@
       const [empresa, setEmpresa] = useState(null);
       const [productosRaw, setProductosRaw] = useState([]);
       const [masVendidos, setMasVendidos] = useState([]);   // IDs de productos más pedidos (de backup_pedidos)
+      const [compradosJuntos, setCompradosJuntos] = useState({});   // { idProd: [idsSugeridos] }
       const [listas, setListas] = useState([]);
       const [cargando, setCargando] = useState(true);
       const [aviso, setAviso] = useState("");
@@ -485,6 +521,7 @@
             setCfg(mergeCfg(savedCfg));
             // Más vendidos en segundo plano (no bloquea la carga de la tienda)
             fetchMasVendidos(emp.id).then(setMasVendidos).catch(() => {});
+            fetchCompradosJuntos(emp.id).then(setCompradosJuntos).catch(() => {});
             if (!prods.length) setAviso("La empresa no tiene productos cargados todavía.");
           } catch (e) {
             console.error("Supabase:", e.message);
@@ -1151,6 +1188,34 @@
                         <button onClick={(e) => agregarConVuelo(p, e)} aria-label="Agregar uno" className="px-5 py-1.5"><Plus size={18} style={{ color: TEMA.gold }} /></button>
                       </div>
                     )}
+
+                    {/* Comprados juntos: productos que suelen pedirse con este */}
+                    {(() => {
+                      const sugIds = compradosJuntos[String(p.id)] || [];
+                      const sugProds = sugIds
+                        .map((id) => productos.find((x) => String(x.id) === String(id)))
+                        .filter(Boolean)
+                        .slice(0, 6);
+                      if (sugProds.length < 2) return null;
+                      return (
+                        <div className="mt-4 pt-3" style={{ borderTop: `1px solid ${TEMA.borde}` }}>
+                          <div className="text-xs font-bold mb-2" style={{ color: TEMA.gold }}>🛒 Suelen pedirse juntos</div>
+                          <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+                            {sugProds.map((sp) => (
+                              <div key={sp.id} onClick={() => setDetalle(sp)} className="shrink-0 w-24 cursor-pointer rounded-xl overflow-hidden" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }}>
+                                <div className="h-16 flex items-center justify-center" style={{ background: TEMA.bg }}>
+                                  {sp.foto ? <img src={sp.foto} alt={sp.nombre} className="w-full h-full object-contain p-1" loading="lazy" /> : <span className="text-2xl">{emojiCat(sp.cat)}</span>}
+                                </div>
+                                <div className="p-1.5">
+                                  <div className="text-[10px] leading-tight line-clamp-2 mb-0.5" style={{ color: TEMA.texto }}>{sp.nombre}</div>
+                                  <div className="text-[11px] font-extrabold" style={{ color: TEMA.gold }}>{fmt(sp.precio)}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
