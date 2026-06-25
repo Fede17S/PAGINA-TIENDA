@@ -299,6 +299,7 @@
     const Tag = mkIcon('<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>');
     const Truck = mkIcon('<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>');
     const ShieldCheck = mkIcon('<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>');
+    const Share2 = mkIcon('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>');
     const Clock = mkIcon('<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>');
     const ChevronLeft = mkIcon('<path d="m15 18-6-6 6-6"/>');
     const ChevronRight = mkIcon('<path d="m9 18 6-6-6-6"/>');
@@ -634,7 +635,13 @@
               ) : (
                 <div className="mt-2 w-full py-1 rounded-lg flex items-center justify-between" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }}>
                   <button onClick={() => quitar(p.id)} className="px-3 py-1"><Minus size={16} style={{ color: TEMA.gold }} /></button>
-                  <span className="font-bold text-sm">{enCarrito}</span>
+                  <input
+                    type="text" inputMode="numeric" value={enCarrito}
+                    onChange={(e) => setCantidad(p.id, e.target.value)}
+                    onFocus={(e) => e.target.select()}
+                    aria-label="Cantidad"
+                    className="font-bold text-sm text-center bg-transparent outline-none w-12"
+                    style={{ color: TEMA.texto }} />
                   <button onClick={(e) => agregarConVuelo(p, e)} className="px-3 py-1"><Plus size={16} style={{ color: TEMA.gold }} /></button>
                 </div>
               )}
@@ -697,6 +704,22 @@
         });
       };
       const eliminar = (id) => setCarrito((c) => { const cp = { ...c }; delete cp[id]; return cp; });
+      // Setear la cantidad directo (input editable en la tarjeta/carrito).
+      const setCantidad = (id, valor) => {
+        const p = prodById(id);
+        const min = p ? minDe(p) : 1;
+        let n = parseInt(String(valor).replace(/[^0-9]/g, ""), 10);
+        setCarrito((c) => {
+          const cp = { ...c };
+          if (!n || isNaN(n) || n < 1) { // vacío o 0 → sacar del carrito
+            delete cp[id];
+          } else {
+            if (n < min) n = min; // respeta el mínimo del producto
+            cp[id] = n;
+          }
+          return cp;
+        });
+      };
       const vaciar = () => setCarrito({});
 
       const itemsCarrito = Object.entries(carrito).map(([id, qty]) => {
@@ -781,6 +804,26 @@
       // Cierra el carrito y resetea todo el flujo
       const cerrarCarrito = () => { setCarritoAbierto(false); setTimeout(() => setPaso("carrito"), 200); };
       const nuevoPedido = () => { setCarrito({}); setCliNom(""); setCliTel(""); setCliDir(""); setPaso("carrito"); setCarritoAbierto(false); };
+      // Compartir la tienda (Web Share API nativo; si no, copia el link o abre WhatsApp).
+      const compartirTienda = async () => {
+        const url = window.location.href;
+        const titulo = nombreTienda || "Tienda online";
+        const texto = `Mirá el catálogo de ${titulo}: `;
+        try {
+          if (navigator.share) {
+            await navigator.share({ title: titulo, text: texto, url });
+            return;
+          }
+        } catch (e) { return; /* el usuario canceló */ }
+        // Fallback: copiar al portapapeles
+        try {
+          await navigator.clipboard.writeText(url);
+          alert("¡Link copiado! Ya lo podés pegar donde quieras.");
+        } catch (e) {
+          // Último recurso: abrir WhatsApp con el link
+          window.open(`https://wa.me/?text=${encodeURIComponent(texto + url)}`, "_blank");
+        }
+      };
       const avisarWhatsApp = () => {
         const lineas = itemsCarrito.map((i) => `• ${i.qty}x ${i.nombre} — ${fmt(i.subtotal)}`).join("\n");
         const extra = envio > 0 ? `\nEnvío: ${fmt(envio)}` : "";
@@ -1025,6 +1068,9 @@
               </div>
               <button onClick={abrirAdmin} title="Administrar tienda" aria-label="Administrar tienda" className="shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: adminOk ? TEMA.gold : TEMA.textoSuave }}>
                 <Settings size={18} />
+              </button>
+              <button onClick={compartirTienda} aria-label="Compartir tienda" className="shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.gold }}>
+                <Share2 size={18} />
               </button>
               <button ref={cartRef} onClick={() => setCarritoAbierto(true)} aria-label="Abrir carrito" className="relative shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>
                 <ShoppingCart size={20} />
