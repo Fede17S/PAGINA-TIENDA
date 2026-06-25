@@ -135,25 +135,27 @@
       return sbUpsert("tienda_config", { empresa_id: empId, config, updated_at: new Date().toISOString() }, "empresa_id");
     }
     async function validarAdmin(empId, uid, pass, empCodigo) {
-      // 1) Validar con la función SEGURA del servidor (igual que el panel principal).
-      //    No expone ni depende de la columna pass en texto plano.
-      if (empCodigo) {
-        try {
-          const r = await fetch(`${SB_URL}/rest/v1/rpc/verificar_login`, {
-            method: "POST",
-            headers: { ...SB_HDR, "Content-Type": "application/json" },
-            body: JSON.stringify({ p_emp_codigo: empCodigo, p_uid: uid, p_pass: pass }),
-          });
-          if (r.ok) {
-            const u = await r.json();
-            if (u && u.id && u.role === "admin") return u;
-          }
-        } catch (e) { /* si la RPC no está disponible, caemos al método de respaldo */ }
+      // Validación ÚNICAMENTE con la función segura del servidor (verificar_login).
+      // No se lee ni compara la columna pass en texto plano (las contraseñas están hasheadas).
+      // Devuelve: { ok:true, user } | { ok:false, motivo:"credenciales"|"empresa"|"red" }
+      if (!empCodigo) return { ok: false, motivo: "empresa" };
+      try {
+        const r = await fetch(`${SB_URL}/rest/v1/rpc/verificar_login`, {
+          method: "POST",
+          headers: { ...SB_HDR, "Content-Type": "application/json" },
+          body: JSON.stringify({ p_emp_codigo: empCodigo, p_uid: uid, p_pass: pass }),
+        });
+        if (!r.ok) return { ok: false, motivo: "red" };
+        const u = await r.json();
+        // verificar_login devuelve el usuario si las credenciales son válidas, o null si no.
+        if (u && u.id) {
+          if (u.role === "admin") return { ok: true, user: u };
+          return { ok: false, motivo: "credenciales" }; // existe pero no es admin
+        }
+        return { ok: false, motivo: "credenciales" };
+      } catch (e) {
+        return { ok: false, motivo: "red" };
       }
-      // 2) Respaldo: comparar contra la columna pass (solo si la RPC falló).
-      const rows = await sbGet("usuarios",
-        `select=uid,pass,role,name&empresa_id=eq.${empId}&role=eq.admin&uid=eq.${encodeURIComponent(uid)}`);
-      return (rows && rows[0] && rows[0].pass && rows[0].pass === pass) ? rows[0] : null;
     }
 
     function precioEfectivo(p, listaKey) {
@@ -783,15 +785,30 @@
         clon.ordenCategorias = ord;
         return clon;
       };
-      const abrirAdmin = () => { if (adminOk) { setEditCfg(cfgParaEditar()); setEditorOpen(true); } else { setLoginOpen(true); setLoginErr(""); } };
+      const abrirAdmin = () => {
+        if (adminOk) { setEditCfg(cfgParaEditar()); setEditorOpen(true); return; }
+        // Si la empresa no se cargó bien, no tiene sentido abrir el login (no se podría validar).
+        if (!empresa || !empresa.codigo) {
+          setAviso("No se pudo identificar la empresa. Revisá que el enlace incluya ?emp=TUCODIGO.");
+          return;
+        }
+        setLoginOpen(true); setLoginErr("");
+      };
       const hacerLogin = async () => {
-        if (!empresa) return;
+        if (!empresa) { setLoginErr("No se cargó la empresa. Verificá el enlace de acceso."); return; }
         setLoginCargando(true); setLoginErr("");
         try {
-          const ok = await validarAdmin(empresa.id, loginUid.trim(), loginPass, empresa.codigo);
-          if (ok) { setAdminOk(true); setLoginOpen(false); setLoginPass(""); setEditCfg(cfgParaEditar()); setEditorOpen(true); }
-          else setLoginErr("Usuario o contraseña incorrectos.");
-        } catch (e) { setLoginErr("Error: " + e.message); }
+          const res = await validarAdmin(empresa.id, loginUid.trim(), loginPass, empresa.codigo);
+          if (res.ok) {
+            setAdminOk(true); setLoginOpen(false); setLoginPass(""); setEditCfg(cfgParaEditar()); setEditorOpen(true);
+          } else if (res.motivo === "empresa") {
+            setLoginErr("No se pudo identificar la empresa. Revisá el enlace (debe incluir ?emp=TUCODIGO).");
+          } else if (res.motivo === "red") {
+            setLoginErr("No se pudo conectar con el servidor. Probá de nuevo en un momento.");
+          } else {
+            setLoginErr("Usuario o contraseña incorrectos.");
+          }
+        } catch (e) { setLoginErr("Error inesperado: " + e.message); }
         finally { setLoginCargando(false); }
       };
       const salirAdmin = () => { setAdminOk(false); setEditorOpen(false); };
