@@ -259,6 +259,28 @@
       return prods;
     }
 
+    // Calcula los productos más pedidos leyendo backup_pedidos (últimos 200 pedidos).
+    // Devuelve un array de IDs de producto ordenados por cantidad de veces pedidos.
+    async function fetchMasVendidos(empId) {
+      try {
+        const rows = await sbGet("backup_pedidos", `select=items&empresa_id=eq.${empId}&order=fecha.desc&limit=200`);
+        if (!rows || !rows.length) return [];
+        const conteo = {};
+        rows.forEach((ped) => {
+          let items = ped.items;
+          if (typeof items === "string") { try { items = JSON.parse(items); } catch (_) { items = []; } }
+          if (!Array.isArray(items)) return;
+          items.forEach((it) => {
+            const id = it && (it.id != null ? String(it.id) : null);
+            if (!id || id === "ENVIO") return;
+            const cant = Number(it.c) || 1;
+            conteo[id] = (conteo[id] || 0) + cant;
+          });
+        });
+        return Object.entries(conteo).sort((a, b) => b[1] - a[1]).map(([id]) => id);
+      } catch (e) { return []; }
+    }
+
     // Mezcla la config guardada con los defaults (por si faltan claves)
     function mergeCfg(saved) {
       if (!saved) return { ...CFG_DEFAULT };
@@ -387,6 +409,7 @@
     function Tienda() {
       const [empresa, setEmpresa] = useState(null);
       const [productosRaw, setProductosRaw] = useState([]);
+      const [masVendidos, setMasVendidos] = useState([]);   // IDs de productos más pedidos (de backup_pedidos)
       const [listas, setListas] = useState([]);
       const [cargando, setCargando] = useState(true);
       const [aviso, setAviso] = useState("");
@@ -428,6 +451,7 @@
       const [limite, setLimite] = useState(12);
       const sentinelRef = useRef(null);
       const restoredRef = useRef(false);
+      const [ultimoPedido, setUltimoPedido] = useState(null);   // { carrito, modos } del último pedido confirmado
       const catBarRef = useRef(null);
       const [slide, setSlide] = useState(0);
 
@@ -459,6 +483,8 @@
             setProductosRaw(prods);
             setListas(lists);
             setCfg(mergeCfg(savedCfg));
+            // Más vendidos en segundo plano (no bloquea la carga de la tienda)
+            fetchMasVendidos(emp.id).then(setMasVendidos).catch(() => {});
             if (!prods.length) setAviso("La empresa no tiene productos cargados todavía.");
           } catch (e) {
             console.error("Supabase:", e.message);
@@ -480,6 +506,12 @@
             if (d.cliNom) setCliNom(d.cliNom);
             if (d.cliTel) setCliTel(d.cliTel);
             if (d.cliDir) setCliDir(d.cliDir);
+          }
+          // Cargar el último pedido confirmado (para "repetir pedido")
+          const rawUlt = localStorage.getItem("tienda_ultped_" + empresa.codigo);
+          if (rawUlt) {
+            const u = JSON.parse(rawUlt);
+            if (u && u.carrito && Object.keys(u.carrito).length) setUltimoPedido(u);
           }
         } catch (e) { /* localStorage no disponible (modo privado) */ }
       }, [empresa]);
@@ -584,21 +616,27 @@
         return arr;
       }, [productos, cat, busqueda, orden, soloOfertas]);
 
-      // Armado de secciones: Ofertas arriba, luego agrupado por categoría
+      // Armado de secciones: Más pedidos + Ofertas arriba, luego agrupado por categoría
       const secciones = useMemo(() => {
-        if (cat === "todos" && !soloOfertas) {
+        if (cat === "todos" && !soloOfertas && !busqueda) {
           const ofertas = visibles.filter((p) => p.promo);
           const resto = visibles.filter((p) => !p.promo);
           const cats = [];
           resto.forEach((p) => { if (!cats.includes(p.cat)) cats.push(p.cat); });
           cats.sort(cmpCat);
           const secs = [];
+          // Más pedidos: top productos según historial (máx 6), solo si hay datos
+          if (masVendidos.length) {
+            const topIds = masVendidos.slice(0, 6);
+            const topProds = topIds.map((id) => visibles.find((p) => String(p.id) === String(id))).filter(Boolean);
+            if (topProds.length >= 3) secs.push({ key: "masvendidos", label: "⭐ Los más pedidos", items: topProds });
+          }
           if (ofertas.length) secs.push({ key: "ofertas", label: "🔥 Ofertas", items: ofertas });
           cats.forEach((c) => secs.push({ key: c, label: emojiCat(c) + " " + c, items: resto.filter((p) => p.cat === c) }));
           return secs;
         }
         return [{ key: "all", label: null, items: visibles }];
-      }, [visibles, cat, soloOfertas, cmpCat]);
+      }, [visibles, cat, soloOfertas, busqueda, cmpCat, masVendidos]);
 
       // Reiniciar la cantidad mostrada cuando cambian los filtros
       useEffect(() => { setLimite(12); }, [cat, busqueda, soloOfertas, orden, productos]);
@@ -833,6 +871,12 @@
             body: JSON.stringify(body),
           });
           if (!r.ok) throw new Error(await r.text());
+          // Guardar este pedido como "último pedido" (para poder repetirlo luego)
+          try {
+            const ult = { carrito: { ...carrito }, modos: { ...modos }, fecha: new Date().toISOString() };
+            localStorage.setItem("tienda_ultped_" + empresa.codigo, JSON.stringify(ult));
+            setUltimoPedido(ult);
+          } catch (_) {}
           setPaso("exito");
         } catch (e) {
           console.error("Pedido:", e.message);
@@ -843,6 +887,30 @@
       // Cierra el carrito y resetea todo el flujo
       const cerrarCarrito = () => { setCarritoAbierto(false); setTimeout(() => setPaso("carrito"), 200); };
       const nuevoPedido = () => { setCarrito({}); setCliNom(""); setCliTel(""); setCliDir(""); setPaso("carrito"); setCarritoAbierto(false); };
+      // Repetir el último pedido: recarga el carrito con los productos que TODAVÍA existan en el catálogo.
+      const repetirPedido = () => {
+        if (!ultimoPedido || !ultimoPedido.carrito) return;
+        const nuevoCarrito = {};
+        const nuevosModos = {};
+        let faltantes = 0;
+        Object.entries(ultimoPedido.carrito).forEach(([id, qty]) => {
+          const existe = productos.find((p) => String(p.id) === String(id));
+          if (existe) {
+            nuevoCarrito[id] = qty;
+            if (ultimoPedido.modos && ultimoPedido.modos[id]) nuevosModos[id] = ultimoPedido.modos[id];
+          } else { faltantes++; }
+        });
+        if (!Object.keys(nuevoCarrito).length) {
+          alert("Los productos de tu último pedido ya no están disponibles.");
+          return;
+        }
+        setCarrito(nuevoCarrito);
+        setModos((m) => ({ ...m, ...nuevosModos }));
+        setCarritoAbierto(true);
+        if (faltantes > 0) {
+          setTimeout(() => alert(`Agregamos tu pedido anterior. ${faltantes} producto(s) ya no están disponibles y no se incluyeron.`), 300);
+        }
+      };
       // Compartir la tienda (Web Share API nativo; si no, copia el link o abre WhatsApp).
       const compartirTienda = async () => {
         const url = window.location.href;
@@ -1165,6 +1233,13 @@
               <div className="mt-4 rounded-xl p-3 flex items-start gap-2 text-sm" style={{ background: "#2a1410", border: `1px solid ${TEMA.oferta}` }}>
                 <AlertCircle size={18} style={{ color: TEMA.oferta }} className="shrink-0 mt-0.5" /><span>{aviso}</span>
               </div>
+            )}
+
+            {/* Repetir último pedido (si hay uno guardado y el carrito está vacío) */}
+            {ultimoPedido && Object.keys(carrito).length === 0 && (
+              <button onClick={repetirPedido} className="mt-4 w-full rounded-xl p-3 flex items-center justify-center gap-2 text-sm font-bold transition active:scale-[.98]" style={{ background: TEMA.bgCard, border: `1.5px solid ${TEMA.gold}`, color: TEMA.gold }}>
+                <ShoppingCart size={17} /> Repetir mi último pedido
+              </button>
             )}
 
             {/* CATEGORÍAS */}
