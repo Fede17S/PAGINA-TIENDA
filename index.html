@@ -96,6 +96,9 @@
       costoEnvio: 0,              // tarifa si no llega al envío gratis. 0 = sin cargo
       ordenCategorias: [],        // orden manual de categorías (vacío = alfabético)
       listaPrecio: "",            // lista de precios a mostrar (vacío = la primera/clientes)
+      horarios: "",               // horario de atención (texto libre, ej: "Lun a Vie 8-18h")
+      direccionTienda: "",        // dirección física / zona de entrega
+      infoEntrega: "",            // info de entrega/reparto (ej: "Reparto Lun y Jue")
       beneficios: [
         { icon: "truck",  t: "Envío gratis",     s: "Desde $50.000" },
         { icon: "shield", t: "Compra segura",    s: "Pago protegido" },
@@ -300,6 +303,8 @@
     const Truck = mkIcon('<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>');
     const ShieldCheck = mkIcon('<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>');
     const Share2 = mkIcon('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>');
+    const GridIcon = mkIcon('<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>');
+    const ListIcon = mkIcon('<line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>');
     const Clock = mkIcon('<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>');
     const ChevronLeft = mkIcon('<path d="m15 18-6-6 6-6"/>');
     const ChevronRight = mkIcon('<path d="m9 18 6-6-6-6"/>');
@@ -402,6 +407,7 @@
       const [busqueda, setBusqueda] = useState("");
       const [buscFocus, setBuscFocus] = useState(false);
       const [orden, setOrden] = useState("relevancia");
+      const [vista, setVista] = useState("grilla");   // "grilla" (tarjetas) | "lista" (compacta mayorista)
       const [soloOfertas, setSoloOfertas] = useState(false);
       const [carrito, setCarrito] = useState({});
       const [modos, setModos] = useState({});   // { [id]: "unidad" | "caja" }
@@ -646,6 +652,39 @@
                 </div>
               )}
             </div>
+          </div>
+        );
+      };
+
+      // Fila compacta (modo lista rápida para mayoristas): foto chica, nombre, precio y cantidad.
+      const renderFila = (p) => {
+        const enCarrito = carrito[p.id] || 0;
+        return (
+          <div key={p.id} data-prod className="flex items-center gap-3 rounded-xl px-2.5 py-2 transition" style={{ background: TEMA.bgCard, border: `1px solid ${enCarrito > 0 ? TEMA.gold : TEMA.borde}` }}>
+            <div data-thumb onClick={() => setDetalle(p)} className="relative w-12 h-12 shrink-0 rounded-lg flex items-center justify-center cursor-pointer overflow-hidden" style={{ background: TEMA.bgSoft }}>
+              {p.foto ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain" loading="lazy" /> : <span className="text-2xl">{emojiCat(p.cat)}</span>}
+              {p.promo && <span className="absolute -top-0.5 -left-0.5 text-[8px] font-extrabold px-1 py-0.5 rounded-br-lg" style={{ background: TEMA.oferta, color: "#fff" }}>🔥</span>}
+            </div>
+            <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setDetalle(p)}>
+              <div className="text-sm font-medium leading-snug line-clamp-1">{p.nombre}</div>
+              <div className="flex items-center gap-2">
+                <span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-sm font-extrabold">{fmt(p.precio)}</span>
+                {p.unidadesBulto > 1 && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>caja x{p.unidadesBulto}</span>}
+              </div>
+            </div>
+            {enCarrito === 0 ? (
+              p.unidadesBulto > 1 ? (
+                <button onClick={() => setDetalle(p)} className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold" style={{ background: TEMA.gold, color: TEMA.bg }}>📦</button>
+              ) : (
+                <button onClick={(e) => agregarConVuelo(p, e)} className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={14} /> Agregar</button>
+              )
+            ) : (
+              <div className="shrink-0 flex items-center rounded-lg" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }}>
+                <button onClick={() => quitar(p.id)} className="px-2 py-1.5"><Minus size={14} style={{ color: TEMA.gold }} /></button>
+                <input type="text" inputMode="numeric" value={enCarrito} onChange={(e) => setCantidad(p.id, e.target.value)} onFocus={(e) => e.target.select()} aria-label="Cantidad" className="font-bold text-sm text-center bg-transparent outline-none w-9" style={{ color: TEMA.texto }} />
+                <button onClick={(e) => agregarConVuelo(p, e)} className="px-2 py-1.5"><Plus size={14} style={{ color: TEMA.gold }} /></button>
+              </div>
+            )}
           </div>
         );
       };
@@ -1150,6 +1189,9 @@
                 <Tag size={15} /> Solo promos
               </button>
               <div className="flex items-center gap-2">
+                <button onClick={() => setVista((v) => v === "grilla" ? "lista" : "grilla")} aria-label={vista === "grilla" ? "Ver como lista" : "Ver como grilla"} title={vista === "grilla" ? "Ver como lista" : "Ver como grilla"} className="p-1.5 rounded-lg transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.gold }}>
+                  {vista === "grilla" ? <ListIcon size={16} /> : <GridIcon size={16} />}
+                </button>
                 <SlidersHorizontal size={15} style={{ color: TEMA.textoSuave }} />
                 <select value={orden} onChange={(e) => setOrden(e.target.value)} className="text-sm rounded-lg px-2 py-1.5 outline-none" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.texto }}>
                   <option value="relevancia">Relevancia</option>
@@ -1184,9 +1226,15 @@
                     out.push(
                       <section key={sec.key} className="mb-5">
                         {sec.label && <h2 className="text-base font-extrabold mb-2 px-0.5" style={{ color: sec.key === "ofertas" ? TEMA.oferta : TEMA.gold, fontFamily: "'Syne', sans-serif" }}>{sec.label}</h2>}
-                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                          {itemsMostrar.map(renderCard)}
-                        </div>
+                        {vista === "lista" ? (
+                          <div className="flex flex-col gap-2">
+                            {itemsMostrar.map(renderFila)}
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                            {itemsMostrar.map(renderCard)}
+                          </div>
+                        )}
                       </section>
                     );
                   }
@@ -1198,6 +1246,17 @@
                   </div>
                 )}
               </div>
+            )}
+            {/* Datos de la tienda (horarios, dirección, entrega) — solo si el admin cargó algo */}
+            {(cfg.horarios || cfg.direccionTienda || cfg.infoEntrega) && (
+              <footer className="mt-6 mb-2 rounded-2xl p-4" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+                <div className="text-sm font-extrabold mb-2" style={{ color: TEMA.gold, fontFamily: "'Syne', sans-serif" }}>{nombreTienda || "Nuestra tienda"}</div>
+                <div className="space-y-1.5 text-sm" style={{ color: TEMA.textoSuave }}>
+                  {cfg.horarios && <div className="flex items-start gap-2"><Clock size={15} className="shrink-0 mt-0.5" style={{ color: TEMA.gold }} /><span>{cfg.horarios}</span></div>}
+                  {cfg.direccionTienda && <div className="flex items-start gap-2"><MapPin size={15} className="shrink-0 mt-0.5" style={{ color: TEMA.gold }} /><span>{cfg.direccionTienda}</span></div>}
+                  {cfg.infoEntrega && <div className="flex items-start gap-2"><Truck size={15} className="shrink-0 mt-0.5" style={{ color: TEMA.gold }} /><span>{cfg.infoEntrega}</span></div>}
+                </div>
+              </footer>
             )}
             {/* Espacio para que el buscador flotante no tape el último producto (solo móvil) */}
             <div className="h-24 md:hidden" />
@@ -1403,6 +1462,14 @@
                     <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>Nombre de la tienda (vacío = nombre de la empresa)</label><input value={editCfg.nombre} onChange={(e) => setEF("nombre", e.target.value)} placeholder={empresa?.nombre || ""} className={inputCls} style={inputStyle} /></div>
                     <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>Frase / tagline</label><input value={editCfg.tagline} onChange={(e) => setEF("tagline", e.target.value)} className={inputCls} style={inputStyle} /></div>
                     <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>WhatsApp (con código país)</label><input value={editCfg.whatsapp} onChange={(e) => setEF("whatsapp", e.target.value.replace(/[^0-9]/g, ""))} placeholder="5492804..." className={inputCls} style={inputStyle} /></div>
+                    <div className="pt-3 mt-1" style={{ borderTop: `1px solid ${TEMA.borde}` }}>
+                      <div className="text-xs font-bold mb-2" style={{ color: TEMA.gold }}>Datos de la tienda (opcional)</div>
+                      <div className="space-y-2">
+                        <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>Horario de atención</label><input value={editCfg.horarios} onChange={(e) => setEF("horarios", e.target.value)} placeholder="Ej: Lun a Vie 8 a 18h · Sáb 8 a 13h" className={inputCls} style={inputStyle} /></div>
+                        <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>Dirección / zona</label><input value={editCfg.direccionTienda} onChange={(e) => setEF("direccionTienda", e.target.value)} placeholder="Ej: Av. Gales 1234, Puerto Madryn" className={inputCls} style={inputStyle} /></div>
+                        <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>Info de entrega / reparto</label><input value={editCfg.infoEntrega} onChange={(e) => setEF("infoEntrega", e.target.value)} placeholder="Ej: Reparto Lun y Jue en la zona" className={inputCls} style={inputStyle} /></div>
+                      </div>
+                    </div>
                     <div className="pt-3 mt-1" style={{ borderTop: `1px solid ${TEMA.borde}` }}>
                       <div className="text-xs font-bold mb-2" style={{ color: TEMA.gold }}>Compra y envío</div>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
