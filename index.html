@@ -361,6 +361,7 @@
     const ShieldCheck = mkIcon('<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>');
     const Share2 = mkIcon('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>');
     const GridIcon = mkIcon('<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>');
+    const Package = mkIcon('<path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>');
     const ListIcon = mkIcon('<line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>');
     const Clock = mkIcon('<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>');
     const ChevronLeft = mkIcon('<path d="m15 18-6-6 6-6"/>');
@@ -488,6 +489,11 @@
       const sentinelRef = useRef(null);
       const restoredRef = useRef(false);
       const [ultimoPedido, setUltimoPedido] = useState(null);   // { carrito, modos } del último pedido confirmado
+      const [trackCode, setTrackCode] = useState("");           // código de seguimiento del pedido recién hecho
+      const [verSeguimiento, setVerSeguimiento] = useState(false); // pantalla de seguimiento abierta
+      const [segEstado, setSegEstado] = useState(null);         // estado consultado del pedido
+      const [segInput, setSegInput] = useState("");             // input del código en la pantalla de seguimiento
+      const [segCargando, setSegCargando] = useState(false);
       const catBarRef = useRef(null);
       const [slide, setSlide] = useState(0);
 
@@ -889,6 +895,14 @@
           if (cliTel.trim()) obsParts.push("Tel: " + cliTel.trim());
           if (cliDir.trim()) obsParts.push(cliDir.trim());
           if (envio > 0) obsParts.push("Envío: " + fmt(envio));
+          // Generar código de seguimiento único (6 caracteres legibles)
+          const genCode = () => {
+            const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sin caracteres confusos (O,0,I,1,L)
+            let c = "";
+            for (let i = 0; i < 6; i++) c += chars[Math.floor(Math.random() * chars.length)];
+            return c;
+          };
+          const codigo = genCode();
           const body = {
             empresa_id: empresa.id,
             fecha: new Date().toISOString(),
@@ -901,6 +915,8 @@
             tipo: "pedido",
             usuario: "tienda",
             usuario_nom: "Tienda Online",
+            estado: "recibido",
+            track_code: codigo,
           };
           const r = await fetch(`${SB_URL}/rest/v1/backup_pedidos`, {
             method: "POST",
@@ -908,9 +924,11 @@
             body: JSON.stringify(body),
           });
           if (!r.ok) throw new Error(await r.text());
-          // Guardar este pedido como "último pedido" (para poder repetirlo luego)
+          // Guardar el código de seguimiento (para mostrarlo y para seguimiento automático)
+          setTrackCode(codigo);
+          // Guardar este pedido como "último pedido" (para poder repetirlo y seguirlo)
           try {
-            const ult = { carrito: { ...carrito }, modos: { ...modos }, fecha: new Date().toISOString() };
+            const ult = { carrito: { ...carrito }, modos: { ...modos }, fecha: new Date().toISOString(), trackCode: codigo };
             localStorage.setItem("tienda_ultped_" + empresa.codigo, JSON.stringify(ult));
             setUltimoPedido(ult);
           } catch (_) {}
@@ -923,6 +941,22 @@
 
       // Cierra el carrito y resetea todo el flujo
       const cerrarCarrito = () => { setCarritoAbierto(false); setTimeout(() => setPaso("carrito"), 200); };
+      // Consultar el estado de un pedido por su código de seguimiento
+      const consultarSeguimiento = async (codigo) => {
+        const code = (codigo || "").trim().toUpperCase();
+        if (!code || !empresa) return;
+        setSegCargando(true); setSegEstado(null);
+        try {
+          const rows = await sbGet("backup_pedidos", `select=estado,track_code,fecha,cliente_nom,total&empresa_id=eq.${empresa.id}&track_code=eq.${encodeURIComponent(code)}&limit=1`);
+          if (rows && rows[0]) {
+            setSegEstado({ ok: true, estado: rows[0].estado || "recibido", fecha: rows[0].fecha, total: rows[0].total, code });
+          } else {
+            setSegEstado({ ok: false });
+          }
+        } catch (e) {
+          setSegEstado({ ok: false, error: true });
+        } finally { setSegCargando(false); }
+      };
       const nuevoPedido = () => { setCarrito({}); setCliNom(""); setCliTel(""); setCliDir(""); setPaso("carrito"); setCarritoAbierto(false); };
       // Repetir el último pedido: recarga el carrito con los productos que TODAVÍA existan en el catálogo.
       const repetirPedido = () => {
@@ -1135,6 +1169,64 @@
           </div>
 
           {/* Detalle de producto */}
+          {/* MODAL DE SEGUIMIENTO DE PEDIDO */}
+          {verSeguimiento && (() => {
+            const pasos = [
+              { k: "recibido", t: "Recibido", emoji: "📥" },
+              { k: "preparando", t: "Preparando", emoji: "📦" },
+              { k: "enviado", t: "Enviado", emoji: "🚚" },
+              { k: "entregado", t: "Entregado", emoji: "✅" },
+            ];
+            const idxActual = segEstado && segEstado.ok ? pasos.findIndex((p) => p.k === segEstado.estado) : -1;
+            return (
+              <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" onClick={() => setVerSeguimiento(false)}>
+                <div className="absolute inset-0" style={{ background: "#000000aa" }} />
+                <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl overflow-hidden step-in" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, maxHeight: "92vh" }} onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-between p-4" style={{ borderBottom: `1px solid ${TEMA.borde}` }}>
+                    <div className="flex items-center gap-2"><Package size={20} style={{ color: TEMA.gold }} /><h2 style={{ fontFamily: "'Syne', sans-serif" }} className="font-extrabold text-lg">Seguir mi pedido</h2></div>
+                    <button onClick={() => setVerSeguimiento(false)} aria-label="Cerrar" className="p-1.5 rounded-full" style={{ background: TEMA.bgSoft }}><X size={18} style={{ color: TEMA.textoSuave }} /></button>
+                  </div>
+                  <div className="p-4">
+                    <div className="text-xs mb-2" style={{ color: TEMA.textoSuave }}>Ingresá tu código de seguimiento</div>
+                    <div className="flex gap-2 mb-4">
+                      <input value={segInput} onChange={(e) => setSegInput(e.target.value.toUpperCase())} onKeyDown={(e) => e.key === "Enter" && consultarSeguimiento(segInput)} placeholder="Ej: A7F3K2" maxLength={6} className="flex-1 rounded-lg px-3 py-2.5 text-sm font-bold tracking-widest outline-none" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}`, color: TEMA.texto }} />
+                      <button onClick={() => consultarSeguimiento(segInput)} disabled={segCargando || segInput.length < 6} className="px-4 py-2.5 rounded-lg text-sm font-bold" style={{ background: TEMA.gold, color: TEMA.bg, opacity: (segCargando || segInput.length < 6) ? .5 : 1 }}>{segCargando ? "..." : "Buscar"}</button>
+                    </div>
+
+                    {segEstado && segEstado.ok && (
+                      <div>
+                        <div className="text-center mb-4">
+                          <div className="text-xs" style={{ color: TEMA.textoSuave }}>Pedido <b style={{ color: TEMA.gold }}>{segEstado.code}</b></div>
+                          {segEstado.fecha && <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>{new Date(segEstado.fecha).toLocaleDateString("es-AR", { day: "numeric", month: "long" })}</div>}
+                        </div>
+                        <div className="space-y-3">
+                          {pasos.map((p, i) => {
+                            const hecho = i <= idxActual;
+                            const actual = i === idxActual;
+                            return (
+                              <div key={p.k} className="flex items-center gap-3">
+                                <div className="w-9 h-9 rounded-full flex items-center justify-center text-base shrink-0" style={{ background: hecho ? TEMA.gold : TEMA.bgSoft, color: hecho ? TEMA.bg : TEMA.textoSuave, border: `1px solid ${hecho ? TEMA.gold : TEMA.borde}` }}>{p.emoji}</div>
+                                <div className="flex-1">
+                                  <div className="text-sm font-bold" style={{ color: hecho ? TEMA.texto : TEMA.textoSuave }}>{p.t}</div>
+                                  {actual && <div className="text-[11px]" style={{ color: TEMA.gold }}>● Estado actual</div>}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {segEstado && !segEstado.ok && (
+                      <div className="text-center py-4 text-sm" style={{ color: TEMA.textoSuave }}>
+                        {segEstado.error ? "No se pudo consultar. Revisá tu conexión." : "No encontramos un pedido con ese código. Verificá que esté bien escrito."}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           {detalle && (() => {
             const p = detalle;
             const modo = modos[p.id] || "unidad";
@@ -1241,6 +1333,9 @@
               </div>
               <button onClick={abrirAdmin} title="Administrar tienda" aria-label="Administrar tienda" className="shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: adminOk ? TEMA.gold : TEMA.textoSuave }}>
                 <Settings size={18} />
+              </button>
+              <button onClick={() => { setVerSeguimiento(true); setSegEstado(null); const ult = ultimoPedido && ultimoPedido.trackCode; if (ult) { setSegInput(ult); consultarSeguimiento(ult); } }} aria-label="Seguir mi pedido" title="Seguir mi pedido" className="shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.gold }}>
+                <Package size={18} />
               </button>
               <button onClick={compartirTienda} aria-label="Compartir tienda" className="shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.gold }}>
                 <Share2 size={18} />
@@ -1433,10 +1528,17 @@
               <h2 className="title-pop text-center text-3xl font-extrabold mb-2" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.texto }}>¡Pedido realizado! 🎉</h2>
               <p className="title-pop text-center text-sm mb-1" style={{ color: TEMA.textoSuave }}>Tu pedido fue enviado y ya quedó registrado.</p>
               <p className="title-pop text-center text-sm mb-6" style={{ color: TEMA.textoSuave }}>Te vamos a contactar para coordinar la entrega.</p>
-              <div className="title-pop rounded-2xl px-6 py-4 mb-8 text-center" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+              <div className="title-pop rounded-2xl px-6 py-4 mb-4 text-center" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
                 <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>{totalUnidades} productos{envio > 0 ? " + envío" : ""} · Total</div>
                 <div className="text-3xl font-extrabold" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }}>{fmt(totalFinal)}</div>
               </div>
+              {trackCode && (
+                <div className="title-pop rounded-2xl px-6 py-3 mb-6 text-center" style={{ background: TEMA.bgSoft, border: `1px dashed ${TEMA.gold}` }}>
+                  <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>📦 Tu código de seguimiento</div>
+                  <div className="text-2xl font-extrabold tracking-widest" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }}>{trackCode}</div>
+                  <div className="text-[11px] mt-1" style={{ color: TEMA.textoSuave }}>Guardalo para consultar el estado de tu pedido</div>
+                </div>
+              )}
               <div className="title-pop w-full max-w-xs space-y-2">
                 <button onClick={avisarWhatsApp} className="w-full py-3.5 rounded-xl font-bold transition active:scale-95 flex items-center justify-center gap-2" style={{ background: "#25D366", color: "#053d27" }}><WhatsApp size={20} /> Avisar a la empresa</button>
                 <button onClick={nuevoPedido} className="w-full py-3 rounded-xl font-bold transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.texto }}>Seguir comprando</button>
