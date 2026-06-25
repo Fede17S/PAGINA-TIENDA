@@ -61,6 +61,19 @@
     /* @jsxRuntime classic */
     const { useState, useEffect, useMemo, useRef } = React;
 
+    // Silenciar logs de debug en producción (web real). En local se mantienen
+    // para depurar. console.error siempre queda activo para no perder errores.
+    (function(){
+      try {
+        var host = (location && location.hostname) ? location.hostname : "";
+        var esLocal = (host === "localhost" || host === "127.0.0.1" || host === "" || host.indexOf("192.168.") === 0);
+        if(!esLocal){
+          var _noop=function(){};
+          console.log=_noop; console.warn=_noop; console.info=_noop; console.debug=_noop;
+        }
+      } catch(e){}
+    })();
+
     /* ============================================================
        CONFIGURACIÓN BASE  (defaults; el admin de cada empresa los pisa)
        ============================================================ */
@@ -598,10 +611,11 @@
       const renderCard = (p) => {
         const enCarrito = carrito[p.id] || 0;
         return (
-          <div key={p.id} data-prod className="rounded-2xl overflow-hidden flex flex-col transition hover:-translate-y-0.5" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+          <div key={p.id} data-prod className="rounded-2xl overflow-hidden flex flex-col transition hover:-translate-y-0.5" style={{ background: TEMA.bgCard, border: `1px solid ${enCarrito > 0 ? TEMA.gold : TEMA.borde}`, boxShadow: enCarrito > 0 ? `0 0 0 1px ${TEMA.gold}` : "none" }}>
             <div data-thumb onClick={() => setDetalle(p)} className="relative h-28 flex items-center justify-center cursor-pointer" style={{ background: TEMA.bgSoft }}>
               {p.foto ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain p-1" loading="lazy" /> : <span className="text-5xl">{emojiCat(p.cat)}</span>}
-              {p.promo && <span className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: TEMA.oferta, color: "#fff" }}>PROMO</span>}
+              {p.promo && <span className="absolute top-2 left-2 text-[11px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1" style={{ background: TEMA.oferta, color: "#fff", boxShadow: "0 2px 8px #00000055" }}>🔥 OFERTA</span>}
+              {enCarrito > 0 && <span className="absolute top-2 right-2 text-[11px] font-extrabold w-6 h-6 rounded-full flex items-center justify-center" style={{ background: TEMA.gold, color: TEMA.bg, boxShadow: "0 2px 8px #00000055" }}>{enCarrito}</span>}
             </div>
             <div className="p-3 flex flex-col flex-1">
               <h3 onClick={() => setDetalle(p)} className="text-sm font-medium leading-snug mb-1 line-clamp-2 cursor-pointer">{p.nombre}</h3>
@@ -871,6 +885,36 @@
             <button onClick={scrollArriba} aria-label="Volver arriba" className="fixed bottom-24 md:bottom-5 right-4 z-30 p-3 rounded-full transition active:scale-90" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.gold, boxShadow: "0 6px 20px #00000066" }}>
               <ChevronRight size={20} style={{ transform: "rotate(-90deg)" }} />
             </button>
+          )}
+
+          {/* Botón flotante de WhatsApp para dudas (si la empresa tiene número configurado) */}
+          {(cfg.whatsapp || "").replace(/[^0-9]/g, "").length >= 8 && !carritoAbierto && (
+            <a
+              href={`https://wa.me/${(cfg.whatsapp || "").replace(/[^0-9]/g, "")}?text=${encodeURIComponent("¡Hola! Tengo una consulta sobre " + (nombreTienda || "la tienda") + ".")}`}
+              target="_blank" rel="noopener noreferrer"
+              aria-label="Consultar por WhatsApp"
+              className="fixed left-4 z-30 p-3 rounded-full transition active:scale-90 bottom-24 md:bottom-5"
+              style={{ background: "#25D366", color: "#fff", boxShadow: "0 6px 20px #00000066" }}>
+              <WhatsApp size={22} />
+            </a>
+          )}
+
+          {/* Barra flotante con el total del carrito (solo cuando hay productos y el carrito está cerrado) */}
+          {totalUnidades > 0 && !carritoAbierto && (
+            <div className="fixed left-0 right-0 z-20 px-4 bottom-40 md:bottom-20">
+              <button onClick={() => setCarritoAbierto(true)}
+                className="max-w-md mx-auto w-full flex items-center justify-between gap-3 rounded-2xl px-4 py-3 transition active:scale-[.98]"
+                style={{ background: TEMA.gold, color: TEMA.bg, boxShadow: "0 10px 30px #00000088" }}>
+                <span className="flex items-center gap-2 font-bold">
+                  <ShoppingCart size={18} />
+                  {totalUnidades} {totalUnidades === 1 ? "producto" : "productos"}
+                </span>
+                <span className="flex items-center gap-2">
+                  <span className="font-extrabold" style={{ fontFamily: "'Syne', sans-serif" }}>{fmt(totalPesos)}</span>
+                  <span className="text-sm font-bold opacity-80">Ver pedido ›</span>
+                </span>
+              </button>
+            </div>
           )}
 
           {/* Buscador flotante (solo móvil) — acompaña el scroll */}
