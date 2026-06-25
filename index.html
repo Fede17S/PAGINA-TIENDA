@@ -665,7 +665,7 @@
           // Más pedidos: top productos según historial (máx 6), solo si hay datos
           if (masVendidos.length) {
             const topIds = masVendidos.slice(0, 6);
-            const topProds = topIds.map((id) => visibles.find((p) => String(p.id) === String(id))).filter(Boolean);
+            const topProds = topIds.map((id) => visibles.find((p) => String(p.id) === String(id) || String(p.codigo) === String(id))).filter(Boolean);
             if (topProds.length >= 3) secs.push({ key: "masvendidos", label: "⭐ Los más pedidos", items: topProds });
           }
           if (ofertas.length) secs.push({ key: "ofertas", label: "🔥 Ofertas", items: ofertas });
@@ -1191,9 +1191,9 @@
 
                     {/* Comprados juntos: productos que suelen pedirse con este */}
                     {(() => {
-                      const sugIds = compradosJuntos[String(p.id)] || [];
+                      const sugIds = compradosJuntos[String(p.id)] || compradosJuntos[String(p.codigo)] || [];
                       const sugProds = sugIds
-                        .map((id) => productos.find((x) => String(x.id) === String(id)))
+                        .map((id) => productos.find((x) => String(x.id) === String(id) || String(x.codigo) === String(id)))
                         .filter(Boolean)
                         .slice(0, 6);
                       if (sugProds.length < 2) return null;
