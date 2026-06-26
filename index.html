@@ -556,6 +556,10 @@
       const restoredRef = useRef(false);
       const [ultimoPedido, setUltimoPedido] = useState(null);   // { carrito, modos } del último pedido confirmado
       const [trackCode, setTrackCode] = useState("");           // código de seguimiento del pedido recién hecho
+      const [cuponInput, setCuponInput] = useState("");         // código que escribe el cliente
+      const [cuponAplicado, setCuponAplicado] = useState(null); // { id, codigo, tipo, valor, ... } si es válido
+      const [cuponError, setCuponError] = useState("");         // mensaje de error del cupón
+      const [cuponCargando, setCuponCargando] = useState(false);
       const [verSeguimiento, setVerSeguimiento] = useState(false); // pantalla de seguimiento abierta
       const [segEstado, setSegEstado] = useState(null);         // estado consultado del pedido
       const [segInput, setSegInput] = useState("");             // input del código en la pantalla de seguimiento
@@ -933,7 +937,13 @@
       const faltaMinimo = Math.max(0, compraMinima - subtotal);
       const envioGratis = envioGratisDesde > 0 && subtotal >= envioGratisDesde;
       const envio = (!envioGratis && costoEnvio > 0) ? costoEnvio : 0;
-      const totalFinal = subtotal + envio;
+      // Descuento por cupón (si hay uno aplicado y válido)
+      const descuentoCupon = cuponAplicado
+        ? (cuponAplicado.tipo === "monto"
+            ? Math.min(cuponAplicado.valor, subtotal)
+            : Math.round(subtotal * (cuponAplicado.valor / 100) * 100) / 100)
+        : 0;
+      const totalFinal = Math.max(0, subtotal - descuentoCupon) + envio;
 
       // Barra de progreso "inteligente": prioriza mínimo, luego envío gratis
       let barColor, barLabel, barPct;
@@ -970,6 +980,7 @@
           if (cliTel.trim()) obsParts.push("Tel: " + cliTel.trim());
           if (cliDir.trim()) obsParts.push(cliDir.trim());
           if (envio > 0) obsParts.push("Envío: " + fmt(envio));
+          if (cuponAplicado && descuentoCupon > 0) obsParts.push("Cupón " + cuponAplicado.codigo + " (−" + fmt(descuentoCupon) + ")");
           // Generar código de seguimiento único (6 caracteres legibles)
           const genCode = () => {
             const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sin caracteres confusos (O,0,I,1,L)
@@ -999,6 +1010,16 @@
             body: JSON.stringify(body),
           });
           if (!r.ok) throw new Error(await r.text());
+          // Incrementar el contador de usos del cupón (si se usó uno)
+          if (cuponAplicado && cuponAplicado.id) {
+            try {
+              await fetch(`${SB_URL}/rest/v1/cupones?id=eq.${cuponAplicado.id}`, {
+                method: "PATCH",
+                headers: { "apikey": SB_KEY, "Authorization": "Bearer " + SB_KEY, "Content-Type": "application/json", "Prefer": "return=minimal" },
+                body: JSON.stringify({ usos: (cuponAplicado.usos || 0) + 1 }),
+              });
+            } catch (_) {}
+          }
           // Guardar el código de seguimiento (para mostrarlo y para seguimiento automático)
           setTrackCode(codigo);
           // Guardar este pedido como "último pedido" (para poder repetirlo y seguirlo)
@@ -1016,6 +1037,39 @@
 
       // Cierra el carrito y resetea todo el flujo
       const cerrarCarrito = () => { setCarritoAbierto(false); setTimeout(() => setPaso("carrito"), 200); };
+
+      // Validar y aplicar un cupón de descuento
+      const aplicarCupon = async () => {
+        const code = (cuponInput || "").trim().toUpperCase();
+        setCuponError("");
+        if (!code) { setCuponError("Ingresá un código"); return; }
+        if (!empresa) return;
+        setCuponCargando(true);
+        try {
+          const rows = await sbGet("cupones", `select=*&empresa_id=eq.${empresa.id}&codigo=eq.${encodeURIComponent(code)}&limit=1`);
+          const c = rows && rows[0];
+          if (!c) { setCuponError("Cupón inexistente"); setCuponCargando(false); return; }
+          if (!c.activo) { setCuponError("Este cupón está desactivado"); setCuponCargando(false); return; }
+          // Vencimiento
+          if (c.vence) {
+            const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+            if (new Date(c.vence + "T23:59:59") < hoy) { setCuponError("Este cupón venció"); setCuponCargando(false); return; }
+          }
+          // Usos disponibles
+          if (c.max_usos != null && c.usos >= c.max_usos) { setCuponError("Este cupón ya no tiene usos disponibles"); setCuponCargando(false); return; }
+          // Compra mínima
+          const subt = itemsCarrito.reduce((a, i) => a + i.subtotal, 0);
+          if (c.compra_minima > 0 && subt < c.compra_minima) {
+            setCuponError(`Necesitás comprar al menos ${fmt(c.compra_minima)} para usar este cupón`);
+            setCuponCargando(false); return;
+          }
+          setCuponAplicado(c);
+          setCuponError("");
+        } catch (e) {
+          setCuponError("No se pudo validar el cupón. Revisá tu conexión.");
+        } finally { setCuponCargando(false); }
+      };
+      const quitarCupon = () => { setCuponAplicado(null); setCuponInput(""); setCuponError(""); };
       // Consultar el estado de un pedido por su código de seguimiento
       const consultarSeguimiento = async (codigo) => {
         const code = (codigo || "").trim().toUpperCase();
@@ -1695,6 +1749,30 @@
                             <div className="flex justify-between"><span>Subtotal</span><span>{fmt(subtotal)}</span></div>
                             <div className="flex justify-between"><span>Envío</span><span>{fmt(envio)}</span></div>
                           </div>
+                        )}
+                        {/* Cupón de descuento */}
+                        {cuponAplicado ? (
+                          <div className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.ok}` }}>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span style={{ color: TEMA.ok }}>🎟️</span>
+                              <div className="min-w-0">
+                                <div className="text-xs font-bold truncate" style={{ color: TEMA.ok }}>{cuponAplicado.codigo}</div>
+                                <div className="text-[10px]" style={{ color: TEMA.textoSuave }}>{cuponAplicado.tipo === "monto" ? `−${fmt(cuponAplicado.valor)}` : `−${cuponAplicado.valor}%`} aplicado</div>
+                              </div>
+                            </div>
+                            <button onClick={quitarCupon} className="text-xs font-bold px-2 py-1 rounded" style={{ color: TEMA.oferta }}>Quitar</button>
+                          </div>
+                        ) : (
+                          <div>
+                            <div className="flex gap-2">
+                              <input value={cuponInput} onChange={(e) => { setCuponInput(e.target.value.toUpperCase()); setCuponError(""); }} onKeyDown={(e) => e.key === "Enter" && aplicarCupon()} placeholder="🎟️ Código de descuento" className="flex-1 rounded-lg px-3 py-2 text-sm outline-none" style={{ background: TEMA.bgSoft, border: `1px solid ${cuponError ? TEMA.oferta : TEMA.borde}`, color: TEMA.texto }} />
+                              <button onClick={aplicarCupon} disabled={cuponCargando || !cuponInput.trim()} className="px-4 py-2 rounded-lg text-sm font-bold" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.gold}`, color: TEMA.gold, opacity: (cuponCargando || !cuponInput.trim()) ? .5 : 1 }}>{cuponCargando ? "..." : "Aplicar"}</button>
+                            </div>
+                            {cuponError && <div className="text-[11px] mt-1 px-1" style={{ color: TEMA.oferta }}>{cuponError}</div>}
+                          </div>
+                        )}
+                        {descuentoCupon > 0 && (
+                          <div className="flex justify-between text-sm" style={{ color: TEMA.ok }}><span>Descuento</span><span>−{fmt(descuentoCupon)}</span></div>
                         )}
                         <div className="flex items-center justify-between"><span style={{ color: TEMA.textoSuave }}>Total</span><span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-2xl font-extrabold">{fmt(totalFinal)}</span></div>
                         <div className="flex gap-2">
