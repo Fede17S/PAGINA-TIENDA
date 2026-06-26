@@ -13,6 +13,9 @@
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
     body { margin: 0; background: #0a1628; }
+    @media (prefers-color-scheme: light) {
+      body { background: #f4f6fa; }
+    }
     /* Evita el auto-zoom de iOS al enfocar campos (necesita >=16px) */
     input, textarea, select { font-size: 16px !important; }
     ::-webkit-scrollbar { height: 6px; width: 6px; }
@@ -80,10 +83,15 @@
     const EMP_CODIGO_DEFAULT = "";          // respaldo si no hay ?emp= en la URL
     const LISTA_PRECIO = "clientes";        // "clientes" | "patagonia" | lista_key del jsonb
 
-    const TEMA = {
+    const TEMA_OSCURO = {
       bg: "#0a1628", bgCard: "#0f1f38", bgSoft: "#13294b", borde: "#1e3a5f",
       gold: "#c9933a", goldSoft: "#e0b35e", texto: "#e8eef7", textoSuave: "#9bb0cc",
       oferta: "#e8543f", ok: "#3fbf7f",
+    };
+    const TEMA_CLARO = {
+      bg: "#f4f6fa", bgCard: "#ffffff", bgSoft: "#eef2f8", borde: "#d8e0ec",
+      gold: "#b07d28", goldSoft: "#c9933a", texto: "#1a2436", textoSuave: "#5d6b82",
+      oferta: "#d9402b", ok: "#2a9d63",
     };
 
     // Config visual por defecto (se completa/pisa con lo que guarde el admin)
@@ -362,6 +370,8 @@
     const Share2 = mkIcon('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>');
     const GridIcon = mkIcon('<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>');
     const Package = mkIcon('<path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>');
+    const Sun = mkIcon('<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>');
+    const Moon = mkIcon('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>');
     const ListIcon = mkIcon('<line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>');
     const Clock = mkIcon('<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>');
     const ChevronLeft = mkIcon('<path d="m15 18-6-6 6-6"/>');
@@ -444,6 +454,31 @@
        ============================================================ */
     function Tienda() {
       const [empresa, setEmpresa] = useState(null);
+      // Modo de tema: "auto" (según el celular), "claro" u "oscuro". Se recuerda la elección.
+      const [modoTema, setModoTema] = useState(() => {
+        try { return localStorage.getItem("tienda_tema") || "auto"; } catch (_) { return "auto"; }
+      });
+      // Detectar preferencia del sistema operativo del cliente
+      const [prefiereOscuro, setPrefiereOscuro] = useState(() => {
+        try { return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches; } catch (_) { return true; }
+      });
+      // Escuchar cambios en la preferencia del sistema (si el cliente cambia el modo del celular)
+      useEffect(() => {
+        if (!window.matchMedia) return;
+        const mq = window.matchMedia("(prefers-color-scheme: dark)");
+        const handler = (e) => setPrefiereOscuro(e.matches);
+        try { mq.addEventListener("change", handler); } catch (_) { try { mq.addListener(handler); } catch (_) {} }
+        return () => { try { mq.removeEventListener("change", handler); } catch (_) { try { mq.removeListener(handler); } catch (_) {} } };
+      }, []);
+      // Decidir el tema efectivo
+      const esOscuro = modoTema === "auto" ? prefiereOscuro : (modoTema === "oscuro");
+      const TEMA = esOscuro ? TEMA_OSCURO : TEMA_CLARO;
+      // Alternar tema manualmente (sol/luna): cicla claro ↔ oscuro y guarda la elección
+      const toggleTema = () => {
+        const nuevo = esOscuro ? "claro" : "oscuro";
+        setModoTema(nuevo);
+        try { localStorage.setItem("tienda_tema", nuevo); } catch (_) {}
+      };
       const [productosRaw, setProductosRaw] = useState([]);
       const [masVendidos, setMasVendidos] = useState([]);   // IDs de productos más pedidos (de backup_pedidos)
       const [compradosJuntos, setCompradosJuntos] = useState({});   // { idProd: [idsSugeridos] }
@@ -1338,6 +1373,9 @@
               </button>
               <button onClick={() => { setVerSeguimiento(true); setSegEstado(null); const ult = ultimoPedido && ultimoPedido.trackCode; if (ult) { setSegInput(ult); consultarSeguimiento(ult); } }} aria-label="Seguir mi pedido" title="Seguir mi pedido" className="shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.gold }}>
                 <Package size={18} />
+              </button>
+              <button onClick={toggleTema} aria-label={esOscuro ? "Cambiar a modo claro" : "Cambiar a modo oscuro"} title={esOscuro ? "Modo claro" : "Modo oscuro"} className="shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.gold }}>
+                {esOscuro ? <Sun size={18} /> : <Moon size={18} />}
               </button>
               <button onClick={compartirTienda} aria-label="Compartir tienda" className="shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.gold }}>
                 <Share2 size={18} />
