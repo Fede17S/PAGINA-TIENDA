@@ -221,9 +221,20 @@
     }
     function mapProducto(p) {
       const promo = (p.precio_promo && p.precio_promo > 0) ? { precio: p.precio_promo, cant: p.cant_promo || 0 } : null;
+      // Oferta (precio rebajado fijo): vigente si está activa, tiene precio, y no venció
+      let oferta = null;
+      if (p.oferta_activa && p.oferta_precio && p.oferta_precio > 0) {
+        let vigente = true;
+        if (p.oferta_hasta) {
+          const hoy = new Date(); hoy.setHours(0,0,0,0);
+          const hasta = new Date(p.oferta_hasta + "T23:59:59");
+          vigente = hasta >= hoy;
+        }
+        if (vigente) oferta = { precio: p.oferta_precio, hasta: p.oferta_hasta || null };
+      }
       return {
         id: p.id, codigo: p.codigo || "", nombre: p.nombre || "Sin nombre",
-        cat: p.categoria || "Sin categoría", foto: p.foto || "", promo,
+        cat: p.categoria || "Sin categoría", foto: p.foto || "", promo, oferta,
         precioClientes: p.precio_clientes || 0,
         precioPatagonia: p.precio_patagonia || 0,
         precioBase: p.precio_base || 0,
@@ -284,7 +295,7 @@
         try { const cc = await idbGet(ckey); if (cc && cc.ver === ver && cc.data) return cc.data; } catch (e) {}
       }
       const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo";
-      const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default";
+      const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta";
       let rows;
       try { rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`); }
       catch (e) { rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`); }
@@ -525,7 +536,14 @@
         return keys[0] || "clientes";
       }, [cfg.listaPrecio, listas]);
       const productos = useMemo(
-        () => productosRaw.map((p) => ({ ...p, precio: precioEfectivo(p, listaActiva) })),
+        () => productosRaw.map((p) => {
+          const base = precioEfectivo(p, listaActiva);
+          // Si hay oferta vigente y es menor al precio normal, ese es el precio a cobrar
+          if (p.oferta && p.oferta.precio > 0 && p.oferta.precio < base) {
+            return { ...p, precio: p.oferta.precio, precioAntes: base, enOferta: true };
+          }
+          return { ...p, precio: base, precioAntes: null, enOferta: false };
+        }),
         [productosRaw, listaActiva]
       );
 
@@ -772,13 +790,20 @@
           <div key={p.id} data-prod className="rounded-2xl overflow-hidden flex flex-col transition hover:-translate-y-0.5" style={{ background: TEMA.bgCard, border: `1px solid ${enCarrito > 0 ? TEMA.gold : TEMA.borde}`, boxShadow: enCarrito > 0 ? `0 0 0 1px ${TEMA.gold}` : "none" }}>
             <div data-thumb onClick={() => setDetalle(p)} className="relative h-28 flex items-center justify-center cursor-pointer" style={{ background: TEMA.bgSoft }}>
               {p.foto ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain p-1" loading="lazy" /> : <span className="text-5xl">{emojiCat(p.cat)}</span>}
-              {p.promo && <span className="absolute top-2 left-2 text-[11px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1" style={{ background: TEMA.oferta, color: "#fff", boxShadow: "0 2px 8px #00000055" }}>🔥 OFERTA</span>}
+              {p.enOferta && <span className="absolute top-2 left-2 text-[11px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1" style={{ background: TEMA.oferta, color: "#fff", boxShadow: "0 2px 8px #00000055" }}>🔥 OFERTA{p.precioAntes && p.precioAntes > 0 ? ` −${Math.round((1 - p.precio / p.precioAntes) * 100)}%` : ""}</span>}
+              {!p.enOferta && p.promo && <span className="absolute top-2 left-2 text-[11px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1" style={{ background: TEMA.oferta, color: "#fff", boxShadow: "0 2px 8px #00000055" }}>🏷️ PROMO</span>}
               {enCarrito > 0 && <span className="absolute top-2 right-2 text-[11px] font-extrabold w-6 h-6 rounded-full flex items-center justify-center" style={{ background: TEMA.gold, color: TEMA.bg, boxShadow: "0 2px 8px #00000055" }}>{enCarrito}</span>}
             </div>
             <div className="p-3 flex flex-col flex-1">
               <h3 onClick={() => setDetalle(p)} className="text-sm font-medium leading-snug mb-1 line-clamp-2 cursor-pointer">{p.nombre}</h3>
               <div className="mt-auto">
-                <div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.texto }} className="text-lg font-extrabold">{fmt(p.precio)}</div>
+                {p.enOferta && p.precioAntes
+                  ? (<div className="flex items-baseline gap-2">
+                       <div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.oferta }} className="text-lg font-extrabold">{fmt(p.precio)}</div>
+                       <div className="text-xs line-through" style={{ color: TEMA.textoSuave }}>{fmt(p.precioAntes)}</div>
+                     </div>)
+                  : (<div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.texto }} className="text-lg font-extrabold">{fmt(p.precio)}</div>)
+                }
                 {p.unidadesBulto > 1 && <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>📦 caja x{p.unidadesBulto}: {fmt(p.precio * p.unidadesBulto)}</div>}
                 {p.minCompra > 1 && <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>mínimo {p.minCompra} u.</div>}
                 {p.promo && <div className="text-[11px]" style={{ color: TEMA.ok }}>{fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
@@ -814,12 +839,15 @@
           <div key={p.id} data-prod className="flex items-center gap-3 rounded-xl px-2.5 py-2 transition" style={{ background: TEMA.bgCard, border: `1px solid ${enCarrito > 0 ? TEMA.gold : TEMA.borde}` }}>
             <div data-thumb onClick={() => setDetalle(p)} className="relative w-12 h-12 shrink-0 rounded-lg flex items-center justify-center cursor-pointer overflow-hidden" style={{ background: TEMA.bgSoft }}>
               {p.foto ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain" loading="lazy" /> : <span className="text-2xl">{emojiCat(p.cat)}</span>}
-              {p.promo && <span className="absolute -top-0.5 -left-0.5 text-[8px] font-extrabold px-1 py-0.5 rounded-br-lg" style={{ background: TEMA.oferta, color: "#fff" }}>🔥</span>}
+              {(p.enOferta || p.promo) && <span className="absolute -top-0.5 -left-0.5 text-[8px] font-extrabold px-1 py-0.5 rounded-br-lg" style={{ background: TEMA.oferta, color: "#fff" }}>🔥</span>}
             </div>
             <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setDetalle(p)}>
               <div className="text-sm font-medium leading-snug line-clamp-1">{p.nombre}</div>
               <div className="flex items-center gap-2">
-                <span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-sm font-extrabold">{fmt(p.precio)}</span>
+                {p.enOferta && p.precioAntes
+                  ? (<span className="flex items-baseline gap-1.5"><span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.oferta }} className="text-sm font-extrabold">{fmt(p.precio)}</span><span className="text-[11px] line-through" style={{ color: TEMA.textoSuave }}>{fmt(p.precioAntes)}</span></span>)
+                  : (<span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-sm font-extrabold">{fmt(p.precio)}</span>)
+                }
                 {p.unidadesBulto > 1 && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>caja x{p.unidadesBulto}</span>}
               </div>
             </div>
