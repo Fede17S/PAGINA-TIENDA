@@ -221,16 +221,35 @@
     }
     function mapProducto(p) {
       const promo = (p.precio_promo && p.precio_promo > 0) ? { precio: p.precio_promo, cant: p.cant_promo || 0 } : null;
-      // Oferta (precio rebajado fijo): vigente si está activa, tiene precio, y no venció
+      // Oferta: vigente si está activa, tiene datos (% o precio) y no venció.
+      // La tienda usa el precio de la lista "Clientes" (cli).
       let oferta = null;
-      if (p.oferta_activa && p.oferta_precio && p.oferta_precio > 0) {
+      if (p.oferta_activa) {
         let vigente = true;
         if (p.oferta_hasta) {
           const hoy = new Date(); hoy.setHours(0,0,0,0);
           const hasta = new Date(p.oferta_hasta + "T23:59:59");
           vigente = hasta >= hoy;
         }
-        if (vigente) oferta = { precio: p.oferta_precio, hasta: p.oferta_hasta || null };
+        if (vigente) {
+          const tipo = p.oferta_tipo || "fijo";
+          const normalCli = p.precio_clientes || p.precio_base || 0;
+          let precioOf = null;
+          if (tipo === "pct") {
+            const pct = p.oferta_pct || 0;
+            if (pct > 0 && pct < 100 && normalCli > 0) {
+              precioOf = Math.round(normalCli * (1 - pct/100) * 100) / 100;
+            }
+          } else {
+            // fijo: precio por lista (cli), o precio viejo
+            const precios = p.oferta_precios || null;
+            if (precios && precios.cli != null && precios.cli > 0) precioOf = precios.cli;
+            else if (p.oferta_precio && p.oferta_precio > 0) precioOf = p.oferta_precio;
+          }
+          if (precioOf && precioOf > 0 && precioOf < normalCli) {
+            oferta = { precio: precioOf, hasta: p.oferta_hasta || null };
+          }
+        }
       }
       return {
         id: p.id, codigo: p.codigo || "", nombre: p.nombre || "Sin nombre",
@@ -296,7 +315,7 @@
         try { const cc = await idbGet(ckey); if (cc && cc.ver === ver && cc.data) return cc.data; } catch (e) {}
       }
       const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo,familia,es_portada";
-      const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta";
+      const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta,oferta_tipo,oferta_pct,oferta_precios";
       let rows;
       try { rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`); }
       catch (e) { rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`); }
