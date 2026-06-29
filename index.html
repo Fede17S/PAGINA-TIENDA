@@ -1159,12 +1159,12 @@
 
       // Cierra el carrito y resetea todo el flujo
       const cerrarCarrito = () => { setCarritoAbierto(false); setTimeout(() => setPaso("carrito"), 200); };
-      // Abre el flujo de pedido. En desktop (con carrito lateral visible) salta directo
-      // al paso de datos; en móvil abre la lista del carrito como siempre.
+      // Abre el flujo de pedido. En desktop el carrito lateral cambia de vista (lista→datos)
+      // sin abrir ningún panel; en móvil abre el drawer como siempre.
       const abrirCheckout = () => {
         const esDesktop = typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches;
-        setPaso(esDesktop ? "revisar" : "carrito");
-        setCarritoAbierto(true);
+        if (esDesktop) { setPaso("revisar"); }
+        else { setPaso("carrito"); setCarritoAbierto(true); }
       };
 
       // Validar y aplicar un cupón de descuento
@@ -1808,17 +1808,57 @@
             <aside className="hidden lg:flex lg:flex-col lg:w-80 xl:w-96 shrink-0 sticky rounded-2xl overflow-hidden" style={{ top: "5.5rem", maxHeight: "calc(100vh - 7rem)", background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
               <div className="px-4 py-3 flex items-center justify-between shrink-0" style={{ borderBottom: `1px solid ${TEMA.borde}` }}>
                 <div className="flex items-center gap-2">
+                  {paso === "revisar" && <button onClick={() => setPaso("carrito")} className="p-0.5 -ml-1 transition active:scale-90"><ChevronLeft size={18} style={{ color: TEMA.texto }} /></button>}
                   <ShoppingCart size={18} style={{ color: TEMA.gold }} />
-                  <span className="font-extrabold text-sm" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.texto }}>Tu pedido</span>
+                  <span className="font-extrabold text-sm" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.texto }}>{paso === "revisar" ? "Confirmar pedido" : "Tu pedido"}</span>
                 </div>
-                {totalUnidades > 0 && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: TEMA.gold, color: TEMA.bg }}>{totalUnidades} u.</span>}
+                {totalUnidades > 0 && paso !== "revisar" && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: TEMA.gold, color: TEMA.bg }}>{totalUnidades} u.</span>}
               </div>
               {itemsCarrito.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-2 py-12 px-5 text-center" style={{ color: TEMA.textoSuave }}>
                   <ShoppingCart size={36} />
                   <p className="text-xs leading-relaxed">Todavía no agregaste productos.<br />Lo que cargues aparece acá en vivo.</p>
                 </div>
+              ) : paso === "revisar" ? (
+                /* ── Vista DATOS dentro del mismo panel ── */
+                <>
+                  <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4 step-in" style={{ minHeight: 0 }}>
+                    <div>
+                      <div className="text-xs font-bold mb-2" style={{ color: TEMA.gold }}>Resumen del pedido</div>
+                      <div className="rounded-xl divide-y" style={{ background: TEMA.bgSoft, borderColor: TEMA.borde }}>
+                        {itemsCarrito.map((i) => (
+                          <div key={i.id} className="flex items-center justify-between px-3 py-2">
+                            <span className="text-xs truncate mr-2" style={{ color: TEMA.texto }}><span style={{ color: TEMA.gold }} className="font-bold">{i.qty}×</span> {i.nombre}</span>
+                            <span className="precio-num text-xs font-medium shrink-0" style={{ color: TEMA.texto }}>{fmt(i.subtotal)}</span>
+                          </div>
+                        ))}
+                        {envio > 0 && <div className="flex items-center justify-between px-3 py-1.5 text-xs" style={{ color: TEMA.textoSuave }}><span>Envío</span><span className="precio-num">{fmt(envio)}</span></div>}
+                        {descuentoCupon > 0 && <div className="flex items-center justify-between px-3 py-1.5 text-xs" style={{ color: TEMA.ok }}><span>Descuento</span><span className="precio-num">−{fmt(descuentoCupon)}</span></div>}
+                        <div className="flex items-center justify-between px-3 py-2.5"><span className="font-bold text-sm" style={{ color: TEMA.texto }}>Total</span><span className="precio-num text-lg font-extrabold" style={{ color: TEMA.gold }}>{fmt(totalFinal)}</span></div>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold mb-2" style={{ color: TEMA.gold }}>Tus datos</div>
+                      <div className="space-y-2">
+                        <input value={cliNom} onChange={(e) => setCliNom(e.target.value)} placeholder="Nombre / comercio *" className={inputCls} style={inputStyle} />
+                        <input value={cliTel} onChange={(e) => setCliTel(e.target.value)} placeholder="Teléfono (con código de área) *" inputMode="tel" className={inputCls} style={inputStyle} />
+                        <textarea value={cliDir} onChange={(e) => setCliDir(e.target.value)} placeholder="Dirección de entrega *" rows={2} className={inputCls} style={inputStyle} />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-4 py-3 shrink-0" style={{ borderTop: `1px solid ${TEMA.borde}` }}>
+                    {errorEnvio && (
+                      <div className="mb-2 rounded-lg p-2 text-[11px] flex items-start gap-2" style={{ background: "#2a1410", border: `1px solid ${TEMA.oferta}`, color: TEMA.texto }}>
+                        <AlertCircle size={14} style={{ color: TEMA.oferta }} className="shrink-0 mt-0.5" /><span>{errorEnvio}</span>
+                      </div>
+                    )}
+                    <button onClick={confirmarPedido} disabled={enviando} className="w-full py-3 rounded-xl font-bold transition active:scale-95 text-sm" style={{ background: TEMA.gold, color: TEMA.bg, opacity: enviando ? .6 : 1 }}>
+                      {enviando ? "Enviando…" : (errorEnvio ? `Reintentar · ${fmt(totalFinal)}` : `Confirmar pedido · ${fmt(totalFinal)}`)}
+                    </button>
+                  </div>
+                </>
               ) : (
+                /* ── Vista LISTA (default) ── */
                 <>
                   <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2" style={{ minHeight: 0 }}>
                     {itemsCarrito.map((i) => (
@@ -1837,12 +1877,24 @@
                     ))}
                   </div>
                   <div className="px-4 py-3 space-y-2 shrink-0" style={{ borderTop: `1px solid ${TEMA.borde}` }}>
+                    {cuponAplicado ? (
+                      <div className="flex items-center justify-between rounded-lg px-3 py-1.5" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.ok}` }}>
+                        <span className="text-[11px] font-bold truncate" style={{ color: TEMA.ok }}>🎟️ {cuponAplicado.codigo}</span>
+                        <button onClick={quitarCupon} className="text-[11px] font-bold" style={{ color: TEMA.oferta }}>Quitar</button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2">
+                        <input value={cuponInput} onChange={(e) => { setCuponInput(e.target.value.toUpperCase()); setCuponError(""); }} onKeyDown={(e) => e.key === "Enter" && aplicarCupon()} placeholder="🎟️ Cupón" className="flex-1 rounded-lg px-2.5 py-1.5 text-xs outline-none" style={{ background: TEMA.bgSoft, border: `1px solid ${cuponError ? TEMA.oferta : TEMA.borde}`, color: TEMA.texto }} />
+                        <button onClick={aplicarCupon} disabled={cuponCargando || !cuponInput.trim()} className="px-3 py-1.5 rounded-lg text-xs font-bold" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.gold}`, color: TEMA.gold, opacity: (cuponCargando || !cuponInput.trim()) ? .5 : 1 }}>{cuponCargando ? "..." : "Aplicar"}</button>
+                      </div>
+                    )}
+                    {cuponError && <div className="text-[10px] px-1" style={{ color: TEMA.oferta }}>{cuponError}</div>}
                     <div className="flex items-center justify-between">
                       <span className="text-xs" style={{ color: TEMA.textoSuave }}>Total{envio > 0 ? " + envío" : ""}</span>
                       <span className="precio-num text-xl font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.gold }}>{fmt(totalFinal)}</span>
                     </div>
                     {!cumpleMinimo && compraMinima > 0 && <div className="text-[10px] text-center" style={{ color: TEMA.oferta }}>Te faltan {fmt(faltaMinimo)} para el mínimo</div>}
-                    <button onClick={() => { setPaso("revisar"); setCarritoAbierto(true); }} className="w-full py-2.5 rounded-xl text-sm font-bold transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>Finalizar pedido →</button>
+                    <button onClick={() => cumpleMinimo && setPaso("revisar")} disabled={!cumpleMinimo} className="w-full py-2.5 rounded-xl text-sm font-bold transition active:scale-95" style={{ background: cumpleMinimo ? TEMA.gold : TEMA.bgSoft, color: cumpleMinimo ? TEMA.bg : TEMA.textoSuave, cursor: cumpleMinimo ? "pointer" : "not-allowed" }}>Finalizar pedido →</button>
                   </div>
                 </>
               )}
@@ -1851,7 +1903,7 @@
           </main>
 
           {/* CARRITO / CHECKOUT */}
-          {carritoAbierto && paso === "exito" && (
+          {paso === "exito" && (
             <div className="fixed inset-0 z-50 overflow-hidden flex flex-col items-center justify-center px-6" style={{ background: TEMA.bg }}>
               {/* Confetti */}
               {Array.from({ length: 44 }).map((_, i) => {
@@ -1900,7 +1952,7 @@
           )}
 
           {carritoAbierto && paso !== "exito" && (
-            <div className="fixed inset-0 z-40 flex justify-end">
+            <div className="fixed inset-0 z-40 flex justify-end lg:hidden">
               <div className="absolute inset-0" style={{ background: "#00000088" }} onClick={cerrarCarrito} />
               <aside className="relative w-full max-w-sm h-full flex flex-col shadow-2xl" style={{ background: TEMA.bg, borderLeft: `1px solid ${TEMA.borde}` }}>
                 {/* Header con stepper */}
