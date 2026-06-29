@@ -235,6 +235,7 @@
       return {
         id: p.id, codigo: p.codigo || "", nombre: p.nombre || "Sin nombre",
         cat: p.categoria || "Sin categoría", foto: p.foto || "", promo, oferta,
+        familia: p.familia || null, esPortada: p.es_portada || false,
         precioClientes: p.precio_clientes || 0,
         precioPatagonia: p.precio_patagonia || 0,
         precioBase: p.precio_base || 0,
@@ -294,7 +295,7 @@
       if (ver) {
         try { const cc = await idbGet(ckey); if (cc && cc.ver === ver && cc.data) return cc.data; } catch (e) {}
       }
-      const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo";
+      const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo,familia,es_portada";
       const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta";
       let rows;
       try { rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`); }
@@ -306,6 +307,16 @@
       const prods = rows.map(mapProducto);
       try { await idbSet(ckey, { ver, ts: Date.now(), data: prods }); } catch (e) {}
       return prods;
+    }
+
+    // Portadas de familia (foto + título lindo) desde la tabla familias
+    async function fetchFamilias(empId) {
+      try {
+        const rows = await sbGet("familias", `select=familia,titulo,foto&empresa_id=eq.${empId}`);
+        const m = {};
+        (rows || []).forEach((f) => { m[f.familia] = { titulo: f.titulo || "", foto: f.foto || "" }; });
+        return m;
+      } catch (e) { return {}; }
     }
 
     // Calcula los productos más pedidos leyendo backup_pedidos (últimos 200 pedidos).
@@ -522,6 +533,7 @@
         try { localStorage.setItem("tienda_tema", nuevo); } catch (_) {}
       };
       const [productosRaw, setProductosRaw] = useState([]);
+      const [famPortadas, setFamPortadas] = useState({});   // { familia: {titulo, foto} }
       const [masVendidos, setMasVendidos] = useState([]);   // IDs de productos más pedidos (de backup_pedidos)
       const [compradosJuntos, setCompradosJuntos] = useState({});   // { idProd: [idsSugeridos] }
       const [listas, setListas] = useState([]);
@@ -605,13 +617,15 @@
             const emp = await resolverEmpresa(codigo);
             if (!emp) { setAviso(`No se encontró la empresa con código "${codigo}".`); setCargando(false); return; }
             setEmpresa(emp);
-            const [prods, savedCfg, lists] = await Promise.all([
+            const [prods, savedCfg, lists, fams] = await Promise.all([
               fetchProductos(emp.id),
               fetchConfig(emp.id).catch(() => null),
               fetchListas(emp.id).catch(() => []),
+              fetchFamilias(emp.id).catch(() => ({})),
             ]);
             setProductosRaw(prods);
             setListas(lists);
+            setFamPortadas(fams);
             setCfg(mergeCfg(savedCfg));
             // Más vendidos en segundo plano (no bloquea la carga de la tienda)
             fetchMasVendidos(emp.id).then(setMasVendidos).catch(() => {});
@@ -741,11 +755,53 @@
           const okOferta = !soloOfertas || p.promo || p.enOferta;
           return okCat && okBusq && okOferta;
         });
+        // Agrupar por familia: cada familia se representa con su portada (1 tarjeta).
+        // Si hay búsqueda activa, NO agrupamos (para poder encontrar variantes puntuales).
+        if (!busqueda) {
+          const familias = {};
+          const agrupado = [];
+          arr.forEach((p) => {
+            if (p.familia) {
+              if (!familias[p.familia]) {
+                familias[p.familia] = { items: [] };
+                agrupado.push({ _famKey: p.familia, _esFamilia: true });
+              }
+              familias[p.familia].items.push(p);
+            } else {
+              agrupado.push(p);
+            }
+          });
+          // Para cada familia, representar con la portada de la tabla (foto/título) o fallback
+          arr = agrupado.map((cel) => {
+            if (!cel._esFamilia) return cel;
+            const items = familias[cel._famKey].items;
+            const port = famPortadas[cel._famKey] || null;
+            const repr = items.find((x) => x.foto) || items[0];
+            const precios = items.map((x) => x.precio).filter((v) => v > 0);
+            const minP = precios.length ? Math.min(...precios) : 0;
+            const hayOferta = items.some((x) => x.enOferta);
+            const hayPromo = items.some((x) => x.promo);
+            return {
+              ...repr,
+              id: "fam:" + cel._famKey,
+              nombre: (port && port.titulo) ? port.titulo : cel._famKey,
+              foto: (port && port.foto) ? port.foto : (repr.foto || ""),
+              _esFamilia: true,
+              _famNombre: cel._famKey,
+              _variantes: items,
+              _nVariantes: items.length,
+              precio: minP,
+              precioAntes: null,
+              enOferta: hayOferta,
+              promo: hayPromo ? repr.promo : null,
+            };
+          });
+        }
         if (orden === "precio-asc") arr = [...arr].sort((a, b) => a.precio - b.precio);
         if (orden === "precio-desc") arr = [...arr].sort((a, b) => b.precio - a.precio);
         if (orden === "nombre") arr = [...arr].sort((a, b) => a.nombre.localeCompare(b.nombre));
         return arr;
-      }, [productos, cat, busqueda, orden, soloOfertas]);
+      }, [productos, cat, busqueda, orden, soloOfertas, famPortadas]);
 
       // Armado de secciones: Más pedidos + Ofertas arriba, luego agrupado por categoría
       const secciones = useMemo(() => {
@@ -790,6 +846,7 @@
           <div key={p.id} data-prod className="rounded-2xl overflow-hidden flex flex-col transition hover:-translate-y-0.5" style={{ background: TEMA.bgCard, border: `1px solid ${enCarrito > 0 ? TEMA.gold : TEMA.borde}`, boxShadow: enCarrito > 0 ? `0 0 0 1px ${TEMA.gold}` : "none" }}>
             <div data-thumb onClick={() => setDetalle(p)} className="relative h-28 flex items-center justify-center cursor-pointer" style={{ background: TEMA.bgSoft }}>
               {p.foto ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain p-1" loading="lazy" /> : <span className="text-5xl">{emojiCat(p.cat)}</span>}
+              {p._esFamilia && <span className="absolute top-2 right-2 text-[10px] font-extrabold px-2 py-0.5 rounded-full" style={{ background: TEMA.gold, color: TEMA.bg, boxShadow: "0 2px 8px #00000055" }}>🗂️ {p._nVariantes}</span>}
               {p.enOferta && <span className="absolute top-2 left-2 text-[11px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1" style={{ background: TEMA.oferta, color: "#fff", boxShadow: "0 2px 8px #00000055" }}>🔥 OFERTA{p.precioAntes && p.precioAntes > 0 ? ` −${Math.round((1 - p.precio / p.precioAntes) * 100)}%` : ""}</span>}
               {!p.enOferta && p.promo && <span className="absolute top-2 left-2 text-[11px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1" style={{ background: TEMA.oferta, color: "#fff", boxShadow: "0 2px 8px #00000055" }}>🏷️ PROMO</span>}
               {enCarrito > 0 && <span className="absolute top-2 right-2 text-[11px] font-extrabold w-6 h-6 rounded-full flex items-center justify-center" style={{ background: TEMA.gold, color: TEMA.bg, boxShadow: "0 2px 8px #00000055" }}>{enCarrito}</span>}
@@ -802,13 +859,15 @@
                        <div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.oferta }} className="text-lg font-extrabold">{fmt(p.precio)}</div>
                        <div className="text-xs line-through" style={{ color: TEMA.textoSuave }}>{fmt(p.precioAntes)}</div>
                      </div>)
-                  : (<div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.texto }} className="text-lg font-extrabold">{fmt(p.precio)}</div>)
+                  : (<div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.texto }} className="text-lg font-extrabold">{p._esFamilia ? "desde " : ""}{fmt(p.precio)}</div>)
                 }
                 {p.unidadesBulto > 1 && <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>📦 caja x{p.unidadesBulto}: {fmt(p.precio * p.unidadesBulto)}</div>}
                 {p.minCompra > 1 && <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>mínimo {p.minCompra} u.</div>}
                 {p.promo && <div className="text-[11px]" style={{ color: TEMA.ok }}>{fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
               </div>
-              {enCarrito === 0 ? (
+              {p._esFamilia ? (
+                <button onClick={() => setDetalle(p)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>🗂️ Elegir sabores ›</button>
+              ) : enCarrito === 0 ? (
                 p.unidadesBulto > 1 ? (
                   <button onClick={() => setDetalle(p)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>📦 Elegir opción</button>
                 ) : (
@@ -846,12 +905,15 @@
               <div className="flex items-center gap-2">
                 {p.enOferta && p.precioAntes
                   ? (<span className="flex items-baseline gap-1.5"><span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.oferta }} className="text-sm font-extrabold">{fmt(p.precio)}</span><span className="text-[11px] line-through" style={{ color: TEMA.textoSuave }}>{fmt(p.precioAntes)}</span></span>)
-                  : (<span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-sm font-extrabold">{fmt(p.precio)}</span>)
+                  : (<span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-sm font-extrabold">{p._esFamilia ? "desde " : ""}{fmt(p.precio)}</span>)
                 }
-                {p.unidadesBulto > 1 && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>caja x{p.unidadesBulto}</span>}
+                {p.unidadesBulto > 1 && !p._esFamilia && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>caja x{p.unidadesBulto}</span>}
+                {p._esFamilia && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>🗂️ {p._nVariantes} sabores</span>}
               </div>
             </div>
-            {enCarrito === 0 ? (
+            {p._esFamilia ? (
+              <button onClick={() => setDetalle(p)} className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold" style={{ background: TEMA.gold, color: TEMA.bg }}>🗂️ ›</button>
+            ) : enCarrito === 0 ? (
               p.unidadesBulto > 1 ? (
                 <button onClick={() => setDetalle(p)} className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold" style={{ background: TEMA.gold, color: TEMA.bg }}>📦</button>
               ) : (
@@ -1402,6 +1464,39 @@
                     <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>{emojiCat(p.cat)} {p.cat}{p.codigo ? ` · ${p.codigo}` : ""}</div>
                     <h2 className="text-lg font-extrabold mb-3" style={{ fontFamily: "'Syne', sans-serif" }}>{p.nombre}</h2>
 
+                    {p._esFamilia ? (
+                      <div>
+                        <div className="text-[11px] mb-2 font-medium" style={{ color: TEMA.textoSuave }}>Elegí los sabores/variantes:</div>
+                        <div className="space-y-2" style={{ maxHeight: "44vh", overflowY: "auto" }}>
+                          {[...p._variantes].sort((a, b) => (b.esPortada ? 1 : 0) - (a.esPortada ? 1 : 0) || a.nombre.localeCompare(b.nombre)).map((v) => {
+                            const enCar = carrito[v.id] || 0;
+                            return (
+                              <div key={v.id} className="flex items-center gap-2.5 rounded-xl p-2" style={{ background: TEMA.bgSoft, border: `1px solid ${enCar > 0 ? TEMA.gold : TEMA.borde}` }}>
+                                <div className="w-11 h-11 shrink-0 rounded-lg flex items-center justify-center overflow-hidden" style={{ background: TEMA.bgCard }}>
+                                  {v.foto ? <img src={v.foto} alt={v.nombre} className="w-full h-full object-contain" loading="lazy" /> : <span className="text-xl">{emojiCat(v.cat)}</span>}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-xs font-bold leading-snug line-clamp-2">{v.esPortada ? "⭐ " : ""}{v.nombre}</div>
+                                  <div className="text-xs font-extrabold" style={{ color: v.enOferta ? TEMA.oferta : TEMA.gold }}>
+                                    {fmt(v.precio)}{v.enOferta && v.precioAntes ? <span className="text-[10px] line-through ml-1 font-normal" style={{ color: TEMA.textoSuave }}>{fmt(v.precioAntes)}</span> : null}
+                                  </div>
+                                </div>
+                                {enCar === 0 ? (
+                                  <button onClick={(e) => agregarConVuelo(v, e)} className="shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={14} /> </button>
+                                ) : (
+                                  <div className="shrink-0 flex items-center gap-1 rounded-lg px-1" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
+                                    <button onClick={() => quitar(v.id)} className="px-2 py-1.5"><Minus size={14} style={{ color: TEMA.gold }} /></button>
+                                    <span className="text-xs font-bold w-5 text-center">{enCar}</span>
+                                    <button onClick={(e) => agregarConVuelo(v, e)} className="px-2 py-1.5"><Plus size={14} style={{ color: TEMA.gold }} /></button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <button onClick={() => setDetalle(null)} className="w-full mt-3 py-2.5 rounded-xl text-sm font-bold" style={{ background: TEMA.gold, color: TEMA.bg }}>✓ Listo</button>
+                      </div>
+                    ) : (<>
                     {tieneCaja ? (
                       <>
                         <div className="text-[11px] mb-2 font-medium" style={{ color: TEMA.textoSuave }}>Elegí cómo comprarlo:</div>
@@ -1437,9 +1532,10 @@
                         <button onClick={(e) => agregarConVuelo(p, e)} aria-label="Agregar uno" className="px-5 py-1.5"><Plus size={18} style={{ color: TEMA.gold }} /></button>
                       </div>
                     )}
+                    </>)}
 
                     {/* Comprados juntos: productos que suelen pedirse con este */}
-                    {(() => {
+                    {!p._esFamilia && (() => {
                       const sugIds = compradosJuntos[String(p.id)] || compradosJuntos[String(p.codigo)] || [];
                       const sugProds = sugIds
                         .map((id) => productos.find((x) => String(x.id) === String(id) || String(x.codigo) === String(id)))
