@@ -1159,6 +1159,13 @@
 
       // Cierra el carrito y resetea todo el flujo
       const cerrarCarrito = () => { setCarritoAbierto(false); setTimeout(() => setPaso("carrito"), 200); };
+      // Abre el flujo de pedido. En desktop (con carrito lateral visible) salta directo
+      // al paso de datos; en móvil abre la lista del carrito como siempre.
+      const abrirCheckout = () => {
+        const esDesktop = typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches;
+        setPaso(esDesktop ? "revisar" : "carrito");
+        setCarritoAbierto(true);
+      };
 
       // Validar y aplicar un cupón de descuento
       const aplicarCupon = async () => {
@@ -1374,7 +1381,7 @@
           {/* Barra flotante con el total del carrito (solo cuando hay productos y el carrito está cerrado).
               En móvil va justo ENCIMA del buscador flotante; en desktop, abajo. */}
           {totalUnidades > 0 && !carritoAbierto && (
-            <div className="fixed left-0 right-0 z-20 px-4 bottom-20 md:bottom-20">
+            <div className="fixed left-0 right-0 z-20 px-4 bottom-20 md:bottom-20 lg:hidden">
               <button onClick={() => setCarritoAbierto(true)}
                 className="max-w-md mx-auto w-full flex items-center justify-between gap-3 rounded-2xl px-4 py-3 transition active:scale-[.98]"
                 style={{ background: TEMA.gold, color: TEMA.bg, boxShadow: "0 10px 30px #00000088" }}>
@@ -1628,7 +1635,7 @@
               <button onClick={compartirTienda} aria-label="Compartir tienda" className="shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.gold }}>
                 <Share2 size={18} />
               </button>
-              <button ref={cartRef} onClick={() => setCarritoAbierto(true)} aria-label="Abrir carrito" className="relative shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>
+              <button ref={cartRef} onClick={abrirCheckout} aria-label="Abrir carrito" className="relative shrink-0 p-2.5 rounded-xl transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>
                 <ShoppingCart size={20} />
                 {totalUnidades > 0 && <span key={bump} className="cart-bump absolute -top-1.5 -right-1.5 text-[11px] font-bold w-5 h-5 rounded-full flex items-center justify-center" style={{ background: TEMA.oferta, color: "#fff" }}>{totalUnidades}</span>}
               </button>
@@ -1835,7 +1842,7 @@
                       <span className="precio-num text-xl font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.gold }}>{fmt(totalFinal)}</span>
                     </div>
                     {!cumpleMinimo && compraMinima > 0 && <div className="text-[10px] text-center" style={{ color: TEMA.oferta }}>Te faltan {fmt(faltaMinimo)} para el mínimo</div>}
-                    <button onClick={() => setCarritoAbierto(true)} className="w-full py-2.5 rounded-xl text-sm font-bold transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>Finalizar pedido →</button>
+                    <button onClick={() => { setPaso("revisar"); setCarritoAbierto(true); }} className="w-full py-2.5 rounded-xl text-sm font-bold transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>Finalizar pedido →</button>
                   </div>
                 </>
               )}
@@ -1900,7 +1907,7 @@
                 <div className="px-4 py-3" style={{ borderBottom: `1px solid ${TEMA.borde}` }}>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      {paso === "revisar" && <button onClick={() => setPaso("carrito")} className="p-1 -ml-1"><ChevronLeft size={20} /></button>}
+                      {paso === "revisar" && <button onClick={() => { if (typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches) cerrarCarrito(); else setPaso("carrito"); }} className="p-1 -ml-1"><ChevronLeft size={20} /></button>}
                       <h2 style={{ fontFamily: "'Syne', sans-serif" }} className="font-extrabold text-lg">{paso === "carrito" ? "Tu pedido" : "Confirmar pedido"}</h2>
                     </div>
                     <button onClick={cerrarCarrito} className="p-1"><X size={22} /></button>
