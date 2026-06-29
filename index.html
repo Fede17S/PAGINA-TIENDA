@@ -738,7 +738,7 @@
         let arr = productos.filter((p) => {
           const okCat = cat === "todos" || p.cat === cat;
           const okBusq = p.nombre.toLowerCase().includes(busqueda.toLowerCase()) || (p.codigo || "").toLowerCase().includes(busqueda.toLowerCase());
-          const okOferta = !soloOfertas || p.promo;
+          const okOferta = !soloOfertas || p.promo || p.enOferta;
           return okCat && okBusq && okOferta;
         });
         if (orden === "precio-asc") arr = [...arr].sort((a, b) => a.precio - b.precio);
@@ -750,8 +750,8 @@
       // Armado de secciones: Más pedidos + Ofertas arriba, luego agrupado por categoría
       const secciones = useMemo(() => {
         if (cat === "todos" && !soloOfertas && !busqueda) {
-          const ofertas = visibles.filter((p) => p.promo);
-          const resto = visibles.filter((p) => !p.promo);
+          const ofertas = visibles.filter((p) => p.promo || p.enOferta);
+          const resto = visibles.filter((p) => !p.promo && !p.enOferta);
           const cats = [];
           resto.forEach((p) => { if (!cats.includes(p.cat)) cats.push(p.cat); });
           cats.sort(cmpCat);
@@ -1581,7 +1581,7 @@
             <section className="mt-4 flex items-center justify-between gap-3 flex-wrap">
               <button onClick={() => setSoloOfertas((v) => !v)} className="px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 transition active:scale-95"
                 style={{ background: soloOfertas ? TEMA.oferta : TEMA.bgCard, color: soloOfertas ? "#fff" : TEMA.texto, border: `1px solid ${soloOfertas ? TEMA.oferta : TEMA.borde}` }}>
-                <Tag size={15} /> Solo promos
+                <Tag size={15} /> Ofertas y promos
               </button>
               <div className="flex items-center gap-2">
                 <button onClick={() => setVista((v) => v === "grilla" ? "lista" : "grilla")} aria-label={vista === "grilla" ? "Ver como lista" : "Ver como grilla"} title={vista === "grilla" ? "Ver como lista" : "Ver como grilla"} className="p-1.5 rounded-lg transition active:scale-95" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.gold }}>
@@ -1615,13 +1615,23 @@
                   const out = [];
                   for (const sec of secciones) {
                     if (restantes <= 0) break;
-                    const itemsMostrar = sec.items.slice(0, restantes);
+                    // La sección de ofertas (carrusel) muestra todas, sin consumir el límite
+                    const esOfertas = sec.key === "ofertas";
+                    const itemsMostrar = esOfertas ? sec.items : sec.items.slice(0, restantes);
                     if (!itemsMostrar.length) continue;
-                    restantes -= itemsMostrar.length;
+                    if (!esOfertas) restantes -= itemsMostrar.length;
                     out.push(
                       <section key={sec.key} className="mb-5">
                         {sec.label && <h2 className="text-base font-extrabold mb-2 px-0.5" style={{ color: sec.key === "ofertas" ? TEMA.oferta : TEMA.gold, fontFamily: "'Syne', sans-serif" }}>{sec.label}</h2>}
-                        {vista === "lista" ? (
+                        {sec.key === "ofertas" && vista !== "lista" ? (
+                          <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1 snap-x" style={{ scrollbarWidth: "thin" }}>
+                            {itemsMostrar.map((p) => (
+                              <div key={p.id} className="snap-start shrink-0" style={{ width: 168 }}>
+                                {renderCard(p)}
+                              </div>
+                            ))}
+                          </div>
+                        ) : vista === "lista" ? (
                           <div className="flex flex-col gap-2">
                             {itemsMostrar.map(renderFila)}
                           </div>
