@@ -1032,8 +1032,15 @@
         const p = productos.find((x) => String(x.id) === String(id));
         if (!p) return null;
         const modo = modos[id] || "unidad";
-        const precioVenta = modo === "caja" ? p.precio * (p.unidadesBulto || 1) : p.precio;
-        return { ...p, qty, modo, precioVenta, subtotal: precioVenta * qty };
+        const mult = modo === "caja" ? (p.unidadesBulto || 1) : 1;
+        const unidadesReales = qty * mult;
+        // Precio unitario individual: normal (o de oferta), o promo si se alcanza la cantidad.
+        // La oferta tiene prioridad sobre la promo: no se acumulan.
+        let unitInd = p.precio;
+        const aplicaPromo = !!(p.promo && p.promo.precio > 0 && !p.enOferta && (!p.promo.cant || unidadesReales >= p.promo.cant));
+        if (aplicaPromo) unitInd = p.promo.precio;
+        const precioVenta = unitInd * mult;
+        return { ...p, qty, modo, precioVenta, precioUnitInd: unitInd, unidadesReales, aplicaPromo, subtotal: precioVenta * qty };
       }).filter(Boolean);
       const totalUnidades = itemsCarrito.reduce((a, i) => a + i.qty, 0);
       const totalPesos = itemsCarrito.reduce((a, i) => a + i.subtotal, 0);
@@ -1080,9 +1087,10 @@
         try {
           const itemsBackup = itemsCarrito.map((i) => {
             const esCaja = i.modo === "caja";
-            const unidades = esCaja ? i.qty * (i.unidadesBulto || 1) : i.qty;
+            const unidades = i.unidadesReales;
             const nombre = esCaja ? `${i.nombre} (caja x${i.unidadesBulto})` : i.nombre;
-            return { id: i.codigo || String(i.id), n: nombre, c: unidades, p: i.precio, sub: unidades * i.precio, dsc: null };
+            const etiqueta = i.aplicaPromo ? "PROMO" : (i.enOferta ? "OFERTA" : null);
+            return { id: i.codigo || String(i.id), n: nombre, c: unidades, p: i.precioUnitInd, sub: unidades * i.precioUnitInd, dsc: null, et: etiqueta };
           });
           if (envio > 0) itemsBackup.push({ id: "ENVIO", n: "Envío", c: 1, p: envio, sub: envio, dsc: null });
           const obsParts = ["📱 Pedido por tienda online"];
@@ -1864,7 +1872,9 @@
                           <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium truncate">{i.nombre}</div>
                         <div className="text-[10px]" style={{ color: TEMA.textoSuave }}>{i.modo === "caja" ? `${i.qty} caja${i.qty > 1 ? "s" : ""} × ${i.unidadesBulto}u` : `${i.qty} u.`}</div>
-                        <div style={{ color: TEMA.gold }} className="text-sm font-bold">{fmt(i.subtotal)}</div>
+                        <div style={{ color: TEMA.gold }} className="text-sm font-bold">{fmt(i.subtotal)}
+                          {i.aplicaPromo ? <span className="ml-1.5 text-[9px] font-extrabold px-1.5 py-0.5 rounded" style={{ background: TEMA.ok, color: "#fff" }}>🏷️ PROMO</span> : (i.enOferta ? <span className="ml-1.5 text-[9px] font-extrabold px-1.5 py-0.5 rounded" style={{ background: TEMA.oferta, color: "#fff" }}>🔥 OFERTA</span> : null)}
+                        </div>
                       </div>
                           <div className="flex items-center gap-1.5">
                             <button onClick={() => quitar(i.id)} className="p-1 rounded" style={{ background: TEMA.bgSoft }}><Minus size={14} /></button>
