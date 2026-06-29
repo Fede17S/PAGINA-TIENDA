@@ -10,9 +10,11 @@
   <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
   <style>
     body { margin: 0; background: #0a1628; }
+    /* Números de precios parejos y prolijos (no "old-style") */
+    [data-precio], .precio-num { font-variant-numeric: tabular-nums lining-nums; font-feature-settings: "tnum" 1, "lnum" 1; }
     @media (prefers-color-scheme: light) {
       body { background: #f4f6fa; }
     }
@@ -826,9 +828,8 @@
       const secciones = useMemo(() => {
         if (cat === "todos" && !soloOfertas && !busqueda) {
           const ofertas = visibles.filter((p) => p.promo || p.enOferta);
-          const resto = visibles.filter((p) => !p.promo && !p.enOferta);
           const cats = [];
-          resto.forEach((p) => { if (!cats.includes(p.cat)) cats.push(p.cat); });
+          visibles.forEach((p) => { if (!cats.includes(p.cat)) cats.push(p.cat); });
           cats.sort(cmpCat);
           const secs = [];
           // Más pedidos: top productos según historial (máx 6), solo si hay datos
@@ -838,7 +839,9 @@
             if (topProds.length >= 3) secs.push({ key: "masvendidos", label: "⭐ Los más pedidos", items: topProds });
           }
           if (ofertas.length) secs.push({ key: "ofertas", label: "🔥 Ofertas", items: ofertas });
-          cats.forEach((c) => secs.push({ key: c, label: emojiCat(c) + " " + c, items: resto.filter((p) => p.cat === c) }));
+          // Cada categoría muestra TODOS sus productos (los que están en oferta/promo
+          // aparecen tanto en "Ofertas" arriba como en su categoría correspondiente).
+          cats.forEach((c) => secs.push({ key: c, label: emojiCat(c) + " " + c, items: visibles.filter((p) => p.cat === c) }));
           return secs;
         }
         return [{ key: "all", label: null, items: visibles }];
@@ -862,7 +865,7 @@
       const renderCard = (p) => {
         const enCarrito = carrito[p.id] || 0;
         return (
-          <div key={p.id} data-prod className="rounded-2xl overflow-hidden flex flex-col transition hover:-translate-y-0.5" style={{ background: TEMA.bgCard, border: `1px solid ${enCarrito > 0 ? TEMA.gold : TEMA.borde}`, boxShadow: enCarrito > 0 ? `0 0 0 1px ${TEMA.gold}` : "none" }}>
+          <div key={p.id} data-prod className="rounded-2xl overflow-hidden flex flex-col transition hover:-translate-y-0.5 h-full w-full" style={{ background: TEMA.bgCard, border: `1px solid ${enCarrito > 0 ? TEMA.gold : TEMA.borde}`, boxShadow: enCarrito > 0 ? `0 0 0 1px ${TEMA.gold}` : "none" }}>
             <div data-thumb onClick={() => setDetalle(p)} className="relative h-28 flex items-center justify-center cursor-pointer" style={{ background: TEMA.bgSoft }}>
               {p.foto ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain p-1" loading="lazy" /> : <span className="text-5xl">{emojiCat(p.cat)}</span>}
               {p._esFamilia && <span className="absolute top-2 right-2 text-[10px] font-extrabold px-2 py-0.5 rounded-full" style={{ background: TEMA.gold, color: TEMA.bg, boxShadow: "0 2px 8px #00000055" }}>🗂️ {p._nVariantes}</span>}
@@ -871,29 +874,30 @@
               {enCarrito > 0 && <span className="absolute top-2 right-2 text-[11px] font-extrabold w-6 h-6 rounded-full flex items-center justify-center" style={{ background: TEMA.gold, color: TEMA.bg, boxShadow: "0 2px 8px #00000055" }}>{enCarrito}</span>}
             </div>
             <div className="p-3 flex flex-col flex-1">
-              <h3 onClick={() => setDetalle(p)} className="text-sm font-medium leading-snug mb-1 line-clamp-2 cursor-pointer">{p.nombre}</h3>
-              <div className="mt-auto">
+              <h3 onClick={() => setDetalle(p)} className="text-sm font-medium leading-snug mb-1 line-clamp-2 cursor-pointer" style={{ minHeight: "2.5em" }}>{p.nombre}</h3>
+              <div>
                 {p.enOferta && p.precioAntes
                   ? (<div className="flex items-baseline gap-2">
-                       <div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.oferta }} className="text-lg font-extrabold">{fmt(p.precio)}</div>
-                       <div className="text-xs line-through" style={{ color: TEMA.textoSuave }}>{fmt(p.precioAntes)}</div>
+                       <div className="precio-num text-lg font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.oferta }}>{fmt(p.precio)}</div>
+                       <div className="precio-num text-xs line-through" style={{ color: TEMA.textoSuave }}>{fmt(p.precioAntes)}</div>
                      </div>)
-                  : (<div style={{ fontFamily: "'Syne', sans-serif", color: TEMA.texto }} className="text-lg font-extrabold">{p._esFamilia ? "desde " : ""}{fmt(p.precio)}</div>)
+                  : (<div className="precio-num text-lg font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.texto }}>{p._esFamilia ? "desde " : ""}{fmt(p.precio)}</div>)
                 }
-                {p.unidadesBulto > 1 && <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>📦 caja x{p.unidadesBulto}: {fmt(p.precio * p.unidadesBulto)}</div>}
+                {p.unidadesBulto > 1 && <div className="precio-num text-[11px]" style={{ color: TEMA.textoSuave }}>📦 caja x{p.unidadesBulto}: {fmt(p.precio * p.unidadesBulto)}</div>}
                 {p.minCompra > 1 && <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>mínimo {p.minCompra} u.</div>}
-                {p.promo && <div className="text-[11px]" style={{ color: TEMA.ok }}>{fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
+                {p.promo && <div className="precio-num text-[11px]" style={{ color: TEMA.ok }}>{fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
               </div>
+              <div className="mt-auto pt-2">
               {p._esFamilia ? (
-                <button onClick={() => setDetalle(p)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>🗂️ Elegir sabores ›</button>
+                <button onClick={() => setDetalle(p)} className="w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>🗂️ Elegir sabores ›</button>
               ) : enCarrito === 0 ? (
                 p.unidadesBulto > 1 ? (
-                  <button onClick={() => setDetalle(p)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>📦 Elegir opción</button>
+                  <button onClick={() => setDetalle(p)} className="w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>📦 Elegir opción</button>
                 ) : (
-                  <button onClick={(e) => agregarConVuelo(p, e)} className="mt-2 w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={16} /> Agregar</button>
+                  <button onClick={(e) => agregarConVuelo(p, e)} className="w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={16} /> Agregar</button>
                 )
               ) : (
-                <div className="mt-2 w-full py-1 rounded-lg flex items-center justify-between" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }}>
+                <div className="w-full py-1 rounded-lg flex items-center justify-between" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }}>
                   <button onClick={() => quitar(p.id)} className="px-3 py-1"><Minus size={16} style={{ color: TEMA.gold }} /></button>
                   <input
                     type="text" inputMode="numeric" value={enCarrito}
@@ -905,6 +909,7 @@
                   <button onClick={(e) => agregarConVuelo(p, e)} className="px-3 py-1"><Plus size={16} style={{ color: TEMA.gold }} /></button>
                 </div>
               )}
+              </div>
             </div>
           </div>
         );
@@ -923,8 +928,8 @@
               <div className="text-sm font-medium leading-snug line-clamp-1">{p.nombre}</div>
               <div className="flex items-center gap-2">
                 {p.enOferta && p.precioAntes
-                  ? (<span className="flex items-baseline gap-1.5"><span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.oferta }} className="text-sm font-extrabold">{fmt(p.precio)}</span><span className="text-[11px] line-through" style={{ color: TEMA.textoSuave }}>{fmt(p.precioAntes)}</span></span>)
-                  : (<span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-sm font-extrabold">{p._esFamilia ? "desde " : ""}{fmt(p.precio)}</span>)
+                  ? (<span className="flex items-baseline gap-1.5"><span style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.oferta }} className="text-sm font-extrabold">{fmt(p.precio)}</span><span className="text-[11px] line-through" style={{ color: TEMA.textoSuave }}>{fmt(p.precioAntes)}</span></span>)
+                  : (<span style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.gold }} className="text-sm font-extrabold">{p._esFamilia ? "desde " : ""}{fmt(p.precio)}</span>)
                 }
                 {p.unidadesBulto > 1 && !p._esFamilia && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>caja x{p.unidadesBulto}</span>}
                 {p._esFamilia && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>🗂️ {p._nVariantes} sabores</span>}
@@ -1378,7 +1383,7 @@
                   {totalUnidades} {totalUnidades === 1 ? "producto" : "productos"}
                 </span>
                 <span className="flex items-center gap-2">
-                  <span className="font-extrabold" style={{ fontFamily: "'Syne', sans-serif" }}>{fmt(totalPesos)}</span>
+                  <span className="font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif" }}>{fmt(totalPesos)}</span>
                   <span className="text-sm font-bold opacity-80">Ver pedido ›</span>
                 </span>
               </button>
@@ -1530,11 +1535,11 @@
                         <div className="flex gap-2 mb-3">
                           <button onClick={() => elegirModo(p, "unidad")} className="flex-1 rounded-xl p-2.5 text-center transition active:scale-95" style={{ background: modo === "unidad" ? TEMA.gold : TEMA.bgSoft, color: modo === "unidad" ? TEMA.bg : TEMA.texto, border: `1px solid ${modo === "unidad" ? TEMA.gold : TEMA.borde}` }}>
                             <div className="text-[11px] font-bold">Por unidad</div>
-                            <div className="text-base font-extrabold" style={{ fontFamily: "'Syne', sans-serif" }}>{fmt(p.precio)}</div>
+                            <div className="text-base font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif" }}>{fmt(p.precio)}</div>
                           </button>
                           <button onClick={() => elegirModo(p, "caja")} className="flex-1 rounded-xl p-2.5 text-center transition active:scale-95" style={{ background: modo === "caja" ? TEMA.gold : TEMA.bgSoft, color: modo === "caja" ? TEMA.bg : TEMA.texto, border: `1px solid ${modo === "caja" ? TEMA.gold : TEMA.borde}` }}>
                             <div className="text-[11px] font-bold">Caja x{p.unidadesBulto}</div>
-                            <div className="text-base font-extrabold" style={{ fontFamily: "'Syne', sans-serif" }}>{fmt(p.precio * p.unidadesBulto)}</div>
+                            <div className="text-base font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif" }}>{fmt(p.precio * p.unidadesBulto)}</div>
                           </button>
                         </div>
                         {modo === "caja"
@@ -1543,7 +1548,7 @@
                       </>
                     ) : (
                       <>
-                        <div className="text-2xl font-extrabold" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }}>{fmt(p.precio)}</div>
+                        <div className="text-2xl font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.gold }}>{fmt(p.precio)}</div>
                         {p.minCompra > 1 ? <div className="text-xs mb-3" style={{ color: TEMA.textoSuave }}>mínimo {p.minCompra} u.</div> : <div className="mb-3" />}
                       </>
                     )}
@@ -1747,9 +1752,9 @@
                       <section key={sec.key} className="mb-5">
                         {sec.label && <h2 className="text-base font-extrabold mb-2 px-0.5" style={{ color: sec.key === "ofertas" ? TEMA.oferta : TEMA.gold, fontFamily: "'Syne', sans-serif" }}>{sec.label}</h2>}
                         {sec.key === "ofertas" && vista !== "lista" ? (
-                          <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1 snap-x" style={{ scrollbarWidth: "thin" }}>
+                          <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1 snap-x items-stretch" style={{ scrollbarWidth: "thin" }}>
                             {itemsMostrar.map((p) => (
-                              <div key={p.id} className="snap-start shrink-0" style={{ width: 168 }}>
+                              <div key={p.id} className="snap-start shrink-0 flex" style={{ width: 168 }}>
                                 {renderCard(p)}
                               </div>
                             ))}
@@ -1823,7 +1828,7 @@
               <p className="title-pop text-center text-sm mb-6" style={{ color: TEMA.textoSuave }}>Te vamos a contactar para coordinar la entrega.</p>
               <div className="title-pop rounded-2xl px-6 py-4 mb-4 text-center" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}` }}>
                 <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>{totalUnidades} productos{envio > 0 ? " + envío" : ""} · Total</div>
-                <div className="text-3xl font-extrabold" style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }}>{fmt(totalFinal)}</div>
+                <div className="text-3xl font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.gold }}>{fmt(totalFinal)}</div>
               </div>
               {trackCode && (
                 <div className="title-pop rounded-2xl px-6 py-3 mb-6 text-center" style={{ background: TEMA.bgSoft, border: `1px dashed ${TEMA.gold}` }}>
@@ -1937,7 +1942,7 @@
                         {descuentoCupon > 0 && (
                           <div className="flex justify-between text-sm" style={{ color: TEMA.ok }}><span>Descuento</span><span>−{fmt(descuentoCupon)}</span></div>
                         )}
-                        <div className="flex items-center justify-between"><span style={{ color: TEMA.textoSuave }}>Total</span><span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-2xl font-extrabold">{fmt(totalFinal)}</span></div>
+                        <div className="flex items-center justify-between"><span style={{ color: TEMA.textoSuave }}>Total</span><span style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.gold }} className="text-2xl font-extrabold">{fmt(totalFinal)}</span></div>
                         <div className="flex gap-2">
                           <button onClick={vaciar} className="px-3 py-3 rounded-xl text-sm font-medium" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, color: TEMA.textoSuave }}>Vaciar</button>
                           <button onClick={() => cumpleMinimo && setPaso("revisar")} disabled={!cumpleMinimo} className="flex-1 py-3 rounded-xl font-bold transition active:scale-95 flex items-center justify-center gap-1" style={{ background: cumpleMinimo ? TEMA.gold : TEMA.bgSoft, color: cumpleMinimo ? TEMA.bg : TEMA.textoSuave, cursor: cumpleMinimo ? "pointer" : "not-allowed" }}>
@@ -1970,7 +1975,7 @@
                           )}
                           <div className="flex items-center justify-between px-3 py-2.5">
                             <span className="font-bold">Total</span>
-                            <span style={{ fontFamily: "'Syne', sans-serif", color: TEMA.gold }} className="text-xl font-extrabold">{fmt(totalFinal)}</span>
+                            <span style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.gold }} className="text-xl font-extrabold">{fmt(totalFinal)}</span>
                           </div>
                         </div>
                       </div>
