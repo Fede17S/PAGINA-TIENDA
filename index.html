@@ -191,6 +191,24 @@
     async function guardarConfig(empId, config) {
       return sbUpsert("tienda_config", { empresa_id: empId, config, updated_at: new Date().toISOString() }, "empresa_id");
     }
+    async function subirImagenTienda(dataURL, empId, base) {
+      try {
+        if (!dataURL || dataURL.indexOf("data:") !== 0) return dataURL;
+        const arr = dataURL.split(","), mime = (arr[0].match(/:(.*?);/) || [])[1] || "image/jpeg";
+        const bstr = atob(arr[1]); let n = bstr.length; const u8 = new Uint8Array(n);
+        while (n--) u8[n] = bstr.charCodeAt(n);
+        const blob = new Blob([u8], { type: mime });
+        const slug = (base || "banner").toString().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 30) || "banner";
+        const path = (empId || "x") + "/" + slug + "_" + Date.now() + "_" + Math.floor(Math.random() * 9999) + ".jpg";
+        const resp = await fetch(SB_URL + "/storage/v1/object/productos/" + path, {
+          method: "POST",
+          headers: { apikey: SB_KEY, Authorization: "Bearer " + SB_KEY, "Content-Type": blob.type || "image/jpeg", "x-upsert": "true" },
+          body: blob
+        });
+        if (!resp.ok) throw new Error("storage " + resp.status);
+        return SB_URL + "/storage/v1/object/public/productos/" + path;
+      } catch (e) { console.warn("subir imagen tienda:", e); return dataURL; }
+    }
     async function validarAdmin(empId, uid, pass, empCodigo) {
       // Validación ÚNICAMENTE con la función segura del servidor (verificar_login).
       // No se lee ni compara la columna pass en texto plano (las contraseñas están hasheadas).
@@ -1331,7 +1349,7 @@ function Tienda() {
       const addBenef = () => setEditCfg((c) => ({ ...c, beneficios: [...c.beneficios, { icon: "star", t: "Nuevo beneficio", s: "Descripción" }] }));
       const delBenef = (i) => setEditCfg((c) => ({ ...c, beneficios: c.beneficios.filter((_, j) => j !== i) }));
       const setBan = (i, k, v) => setEditCfg((c) => { const b = [...c.banners]; b[i] = { ...b[i], [k]: v }; return { ...c, banners: b }; });
-      const addBan = () => setEditCfg((c) => ({ ...c, banners: [...c.banners, { emoji: "✨", titulo: "Nuevo banner", subtitulo: "Subtítulo", cta: "Ver", accion: "ofertas" }] }));
+      const addBan = () => setEditCfg((c) => ({ ...c, banners: [...c.banners, { emoji: "✨", titulo: "Nuevo banner", subtitulo: "Subtítulo", cta: "Ver", accion: "ofertas", foto: "" }] }));
       const delBan = (i) => setEditCfg((c) => ({ ...c, banners: c.banners.filter((_, j) => j !== i) }));
       const moverCat = (i, dir) => setEditCfg((c) => {
         const arr = [...(c.ordenCategorias || [])];
@@ -1667,7 +1685,7 @@ function Tienda() {
             {cfg.banners.length > 0 && (
               <section className="mt-4 relative rounded-2xl overflow-hidden" style={{ height: 200 }}>
                 {cfg.banners.map((b, i) => (
-                  <div key={i} className="absolute inset-0 transition-opacity duration-700 flex items-center" style={{ background: GRADS[i % GRADS.length], opacity: i === slide ? 1 : 0, pointerEvents: i === slide ? "auto" : "none" }}>
+                  <div key={i} className="absolute inset-0 transition-opacity duration-700 flex items-center" style={{ background: b.foto ? `linear-gradient(90deg, rgba(0,0,0,.62), rgba(0,0,0,.18)), url("${b.foto}") center/cover no-repeat` : GRADS[i % GRADS.length], opacity: i === slide ? 1 : 0, pointerEvents: i === slide ? "auto" : "none" }}>
                     <div className="px-6 sm:px-10 max-w-md">
                       <div className="text-4xl mb-2">{b.emoji}</div>
                       <h2 style={{ fontFamily: "'Syne', sans-serif", color: "#ffffff" }} className="text-2xl sm:text-3xl font-extrabold mb-1">{b.titulo}</h2>
@@ -2178,6 +2196,12 @@ function Tienda() {
                           <input value={b.titulo} onChange={(e) => setBan(i, "titulo", e.target.value)} placeholder="Título" className={inputCls} style={inputStyle} />
                           <input value={b.subtitulo} onChange={(e) => setBan(i, "subtitulo", e.target.value)} placeholder="Subtítulo" className={inputCls} style={inputStyle} />
                           <input value={b.cta} onChange={(e) => setBan(i, "cta", e.target.value)} placeholder="Texto del botón" className={inputCls} style={inputStyle} />
+                          <div className="flex items-center gap-2 mt-1">
+                            {b.foto && <img src={b.foto} alt="" style={{ width: 46, height: 30, objectFit: "cover", borderRadius: 6, border: `1px solid ${TEMA.borde}` }} />}
+                            <button type="button" onClick={() => document.getElementById("ban-foto-" + i).click()} className="px-2.5 py-1.5 rounded-lg text-xs" style={{ background: TEMA.bgSoft, color: TEMA.textoSuave, border: `1px solid ${TEMA.borde}` }}>📷 {b.foto ? "Cambiar foto" : "Foto de fondo"}</button>
+                            <input id={"ban-foto-" + i} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const file = e.target.files[0]; if (!file) return; const rd = new FileReader(); rd.onload = async (ev) => { const url = await subirImagenTienda(ev.target.result, empresa && empresa.id, "banner"); setBan(i, "foto", url); }; rd.readAsDataURL(file); e.target.value = ""; }} />
+                            {b.foto && <button type="button" onClick={() => setBan(i, "foto", "")} className="px-2 py-1.5 rounded-lg text-xs" style={{ color: TEMA.oferta }}>Quitar</button>}
+                          </div>
                           <select value={b.accion || "ofertas"} onChange={(e) => setBan(i, "accion", e.target.value)} className={inputCls} style={inputStyle}>
                             <option value="ofertas">Al tocar: mostrar ofertas</option>
                             <option value="categoria">Al tocar: ir a una categoría</option>
