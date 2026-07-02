@@ -255,7 +255,7 @@
       }
       return {
         id: p.id, codigo: p.codigo || "", nombre: p.nombre || "Sin nombre",
-        cat: p.categoria || "Sin categoría", activo: p.activo !== false, foto: p.foto || "", promo, oferta,
+        cat: p.categoria || "Sin categoría", activo: p.activo !== false, foto: p.foto || "", fotos: Array.isArray(p.fotos) ? p.fotos : [], promo, oferta,
         familia: p.familia || null, esPortada: p.es_portada || false,
         precioClientes: p.precio_clientes || 0,
         precioPatagonia: p.precio_patagonia || 0,
@@ -317,7 +317,7 @@
         try { const cc = await idbGet(ckey); if (cc && cc.ver === ver && cc.data) return cc.data; } catch (e) {}
       }
       const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo,familia,es_portada";
-      const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta,oferta_tipo,oferta_pct,oferta_precios,activo";
+      const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta,oferta_tipo,oferta_pct,oferta_precios,activo,fotos";
       let rows;
       try { rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`); }
       catch (e) { rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`); }
@@ -525,7 +525,32 @@
     /* ============================================================
        COMPONENTE PRINCIPAL
        ============================================================ */
-    function Tienda() {
+    function Galeria({ fotos, alt, cat }) {
+  const imgs = (fotos || []).filter(Boolean);
+  const [idx, setIdx] = React.useState(0);
+  const touchX = React.useRef(null);
+  React.useEffect(() => { setIdx(0); }, [alt]);
+  if (!imgs.length) return <span className="text-7xl">{emojiCat(cat)}</span>;
+  const go = (d) => setIdx((x) => (x + d + imgs.length) % imgs.length);
+  return (
+    <div className="relative w-full h-full"
+      onTouchStart={(e) => { touchX.current = e.touches[0].clientX; }}
+      onTouchEnd={(e) => { if (touchX.current == null) return; const dx = e.changedTouches[0].clientX - touchX.current; if (Math.abs(dx) > 40) go(dx < 0 ? 1 : -1); touchX.current = null; }}>
+      <img src={imgs[idx]} alt={alt} className="w-full h-full object-contain p-3" />
+      {imgs.length > 1 && (
+        <React.Fragment>
+          <button type="button" onClick={() => go(-1)} className="absolute left-1 w-8 h-8 rounded-full flex items-center justify-center text-lg" style={{ top: "50%", transform: "translateY(-50%)", background: "rgba(0,0,0,.45)", color: "#fff" }}>‹</button>
+          <button type="button" onClick={() => go(1)} className="absolute right-1 w-8 h-8 rounded-full flex items-center justify-center text-lg" style={{ top: "50%", transform: "translateY(-50%)", background: "rgba(0,0,0,.45)", color: "#fff" }}>›</button>
+          <div className="absolute left-0 right-0 flex justify-center gap-1" style={{ bottom: 6 }}>
+            {imgs.map((_, k) => <span key={k} onClick={() => setIdx(k)} style={{ width: 7, height: 7, borderRadius: "50%", cursor: "pointer", background: k === idx ? "#c9933a" : "rgba(255,255,255,.5)" }}></span>)}
+          </div>
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+function Tienda() {
       const [empresa, setEmpresa] = useState(null);
       // Modo de tema: "auto" (según el celular), "claro" u "oscuro". Se recuerda la elección.
       const [modoTema, setModoTema] = useState(() => {
@@ -889,7 +914,7 @@
               </div>
               <div className="mt-auto pt-2">
               {p._esFamilia ? (
-                <button onClick={() => setDetalle(p)} className="w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>🗂️ Elegir sabores ›</button>
+                <button onClick={() => setDetalle(p)} className="w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>🗂️ Elegir opciones ›</button>
               ) : enCarrito === 0 ? (
                 p.unidadesBulto > 1 ? (
                   <button onClick={() => setDetalle(p)} className="w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}>📦 Elegir opción</button>
@@ -932,7 +957,7 @@
                   : (<span style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.gold }} className="text-sm font-extrabold">{p._esFamilia ? "desde " : ""}{fmt(p.precio)}</span>)
                 }
                 {p.unidadesBulto > 1 && !p._esFamilia && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>caja x{p.unidadesBulto}</span>}
-                {p._esFamilia && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>🗂️ {p._nVariantes} sabores</span>}
+                {p._esFamilia && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>🗂️ {p._nVariantes} opciones</span>}
               </div>
             </div>
             {p._esFamilia ? (
@@ -1490,7 +1515,7 @@
                 <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl overflow-hidden step-in" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, maxHeight: "92vh" }} onClick={(e) => e.stopPropagation()}>
                   <button onClick={() => setDetalle(null)} aria-label="Cerrar" className="absolute top-2 right-2 z-10 p-1.5 rounded-full" style={{ background: "#00000077", color: "#fff" }}><X size={18} /></button>
                   <div className="h-56 flex items-center justify-center" style={{ background: TEMA.bgSoft }}>
-                    {p.foto ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain p-3" /> : <span className="text-7xl">{emojiCat(p.cat)}</span>}
+                    <Galeria fotos={[p.foto, ...(p.fotos || [])]} alt={p.nombre} cat={p.cat} />
                   </div>
                   <div className="p-4">
                     <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>{emojiCat(p.cat)} {p.cat}{p.codigo ? ` · ${p.codigo}` : ""}</div>
@@ -1498,7 +1523,7 @@
 
                     {p._esFamilia ? (
                       <div>
-                        <div className="text-[11px] mb-2 font-medium" style={{ color: TEMA.textoSuave }}>Elegí los sabores/variantes:</div>
+                        <div className="text-[11px] mb-2 font-medium" style={{ color: TEMA.textoSuave }}>Elegí las opciones:</div>
                         <div className="space-y-2" style={{ maxHeight: "44vh", overflowY: "auto" }}>
                           {[...p._variantes].sort((a, b) => (b.esPortada ? 1 : 0) - (a.esPortada ? 1 : 0) || a.nombre.localeCompare(b.nombre)).map((v) => {
                             const enCar = carrito[v.id] || 0;
