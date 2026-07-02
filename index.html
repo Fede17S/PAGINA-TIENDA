@@ -125,6 +125,7 @@
       nombre: "",                 // vacío => usa el nombre de la empresa
       tagline: "Catálogo online",
       whatsapp: "5492804000000",
+      colorMarca: "",            // vacío = color por defecto (gold)
       compraMinima: 0,            // 0 = sin mínimo. Si >0, no deja comprar por debajo.
       envioGratisDesde: 50000,    // 0 = no aplica envío gratis por monto
       costoEnvio: 0,              // tarifa si no llega al envío gratis. 0 = sin cargo
@@ -570,7 +571,7 @@ function Tienda() {
       }, []);
       // Decidir el tema efectivo
       const esOscuro = modoTema === "auto" ? prefiereOscuro : (modoTema === "oscuro");
-      const TEMA = esOscuro ? TEMA_OSCURO : TEMA_CLARO;
+      const _TEMA_BASE = esOscuro ? TEMA_OSCURO : TEMA_CLARO;
       const GRADS = esOscuro ? GRADS_OSCURO : GRADS_CLARO;
       // Alternar tema manualmente (sol/luna): cicla claro ↔ oscuro y guarda la elección
       const toggleTema = () => {
@@ -586,6 +587,7 @@ function Tienda() {
       const [cargando, setCargando] = useState(true);
       const [aviso, setAviso] = useState("");
       const [cfg, setCfg] = useState(CFG_DEFAULT);
+      const TEMA = (cfg && cfg.colorMarca) ? { ..._TEMA_BASE, gold: cfg.colorMarca, goldSoft: cfg.colorMarca } : _TEMA_BASE;
 
       // Lista de precios activa y precios derivados según esa lista
       const listaActiva = useMemo(() => {
@@ -2069,6 +2071,17 @@ function Tienda() {
                     <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>Nombre de la tienda (vacío = nombre de la empresa)</label><input value={editCfg.nombre} onChange={(e) => setEF("nombre", e.target.value)} placeholder={empresa?.nombre || ""} className={inputCls} style={inputStyle} /></div>
                     <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>Frase / tagline</label><input value={editCfg.tagline} onChange={(e) => setEF("tagline", e.target.value)} className={inputCls} style={inputStyle} /></div>
                     <div><label className="text-xs" style={{ color: TEMA.textoSuave }}>WhatsApp (con código país)</label><input value={editCfg.whatsapp} onChange={(e) => setEF("whatsapp", e.target.value.replace(/[^0-9]/g, ""))} placeholder="5492804..." className={inputCls} style={inputStyle} /></div>
+                    <div className="pt-3 mt-1" style={{ borderTop: `1px solid ${TEMA.borde}` }}>
+                      <div className="text-xs font-bold mb-2" style={{ color: TEMA.gold }}>🎨 Color de marca</div>
+                      <div className="flex items-center gap-3">
+                        <input type="color" value={editCfg.colorMarca || "#c9933a"} onChange={(e) => setEF("colorMarca", e.target.value)} style={{ width: 46, height: 40, border: `1px solid ${TEMA.borde}`, borderRadius: 8, background: "transparent", cursor: "pointer", padding: 2 }} />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs" style={{ color: TEMA.textoSuave }}>Se aplica a botones, precios y detalles de la tienda.</div>
+                          <div className="text-[11px] mt-0.5 font-mono" style={{ color: TEMA.textoSuave }}>{editCfg.colorMarca ? editCfg.colorMarca : "Usando el color por defecto"}</div>
+                        </div>
+                        {editCfg.colorMarca && <button type="button" onClick={() => setEF("colorMarca", "")} className="px-2.5 py-1.5 rounded-lg text-xs whitespace-nowrap" style={{ background: TEMA.bgSoft, color: TEMA.textoSuave, border: `1px solid ${TEMA.borde}` }}>Restaurar</button>}
+                      </div>
+                    </div>
                     <div className="pt-3 mt-1" style={{ borderTop: `1px solid ${TEMA.borde}` }}>
                       <div className="text-xs font-bold mb-2" style={{ color: TEMA.gold }}>Datos de la tienda (opcional)</div>
                       <div className="space-y-2">
