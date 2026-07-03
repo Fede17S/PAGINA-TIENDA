@@ -282,8 +282,9 @@
         precioPatagonia: p.precio_patagonia || 0,
         precioBase: p.precio_base || 0,
         preciosJson: p.precios || {},
-        unidadVenta: p.unidad_venta || "unidad",
+        unidadVenta: p.unidad_venta || "ambos",
         unidadesBulto: p.unidades_bulto || 1,
+        precioCaja: p.precio_caja || null,
         minCompra: p.min_compra || 1,
         cantDefault: p.cant_default || 1,
       };
@@ -338,7 +339,7 @@
         try { const cc = await idbGet(ckey); if (cc && cc.ver === ver && cc.data) return cc.data; } catch (e) {}
       }
       const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo,familia,es_portada";
-      const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta,oferta_tipo,oferta_pct,oferta_precios,activo,fotos";
+      const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta,oferta_tipo,oferta_pct,oferta_precios,activo,fotos,precio_caja";
       let rows;
       try { rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`); }
       catch (e) { rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`); }
@@ -930,7 +931,7 @@ function Tienda() {
                      </div>)
                   : (<div className="precio-num text-lg font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.texto }}>{p._esFamilia ? "desde " : ""}{fmt(p.precio)}</div>)
                 }
-                {p.unidadesBulto > 1 && <div className="precio-num text-[11px]" style={{ color: TEMA.textoSuave }}>📦 caja x{p.unidadesBulto}: {fmt(p.precio * p.unidadesBulto)}</div>}
+                {p.unidadesBulto > 1 && <div className="precio-num text-[11px]" style={{ color: TEMA.textoSuave }}>📦 caja x{p.unidadesBulto}: {fmt(cajaPrecio(p))}</div>}
                 {p.minCompra > 1 && <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>mínimo {p.minCompra} u.</div>}
                 {p.promo && <div className="precio-num text-[11px]" style={{ color: TEMA.ok }}>{fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
               </div>
@@ -1002,8 +1003,10 @@ function Tienda() {
       };
 
       const prodById = (id) => productos.find((x) => String(x.id) === String(id));
-      const modoDe = (id) => modos[id] || "unidad";
-      const precioVentaDe = (p) => modoDe(p.id) === "caja" ? p.precio * (p.unidadesBulto || 1) : p.precio;
+      const cajaPrecio = (p) => (p && p.precioCaja > 0) ? p.precioCaja : (((p&&p.precio)||0) * ((p&&p.unidadesBulto)||1));
+      const _esSoloCaja = (p) => p && (p.unidadVenta === "caja" || p.unidadVenta === "bulto");
+      const modoDe = (id) => modos[id] || (_esSoloCaja(prodById(id)) ? "caja" : "unidad");
+      const precioVentaDe = (p) => modoDe(p.id) === "caja" ? cajaPrecio(p) : p.precio;
       const qtyInicialDe = (p) => modoDe(p.id) === "caja" ? 1 : Math.max(p.minCompra || 1, p.cantDefault || 1);
       const minDe = (p) => modoDe(p.id) === "caja" ? 1 : (p.minCompra || 1);
       const elegirModo = (p, modo) => {
@@ -1083,7 +1086,7 @@ function Tienda() {
       const itemsCarrito = Object.entries(carrito).map(([id, qty]) => {
         const p = productos.find((x) => String(x.id) === String(id));
         if (!p) return null;
-        const modo = modos[id] || "unidad";
+        const modo = modos[id] || (_esSoloCaja(p) ? "caja" : "unidad");
         const mult = modo === "caja" ? (p.unidadesBulto || 1) : 1;
         const unidadesReales = qty * mult;
         // Precio unitario individual: normal (o de oferta), o promo si se alcanza la cantidad.
@@ -1091,8 +1094,10 @@ function Tienda() {
         let unitInd = p.precio;
         const aplicaPromo = !!(p.promo && p.promo.precio > 0 && !p.enOferta && (!p.promo.cant || unidadesReales >= p.promo.cant));
         if (aplicaPromo) unitInd = p.promo.precio;
-        const precioVenta = unitInd * mult;
-        return { ...p, qty, modo, precioVenta, precioUnitInd: unitInd, unidadesReales, aplicaPromo, subtotal: precioVenta * qty };
+        let precioVenta = unitInd * mult;
+        let precioUnitFinal = unitInd;
+        if (modo === "caja" && p.precioCaja > 0) { precioVenta = p.precioCaja; precioUnitFinal = p.precioCaja / (p.unidadesBulto || 1); }
+        return { ...p, qty, modo, precioVenta, precioUnitInd: precioUnitFinal, unidadesReales, aplicaPromo, subtotal: precioVenta * qty };
       }).filter(Boolean);
       const totalUnidades = itemsCarrito.reduce((a, i) => a + i.qty, 0);
       const totalPesos = itemsCarrito.reduce((a, i) => a + i.subtotal, 0);
@@ -1529,7 +1534,9 @@ function Tienda() {
             const p = detalle;
             const modo = modos[p.id] || "unidad";
             const tieneCaja = p.unidadesBulto > 1;
-            const precioSel = modo === "caja" ? p.precio * p.unidadesBulto : p.precio;
+            const _puedeUnidad = p.unidadVenta !== "caja" && p.unidadVenta !== "bulto";
+            const _puedeCaja = (p.unidadVenta !== "unidad") && p.unidadesBulto > 1;
+            const precioSel = modo === "caja" ? cajaPrecio(p) : p.precio;
             const enCarrito = carrito[p.id] || 0;
             return (
               <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" onClick={() => setDetalle(null)}>
@@ -1578,20 +1585,22 @@ function Tienda() {
                     ) : (<>
                     {tieneCaja ? (
                       <>
-                        <div className="text-[11px] mb-2 font-medium" style={{ color: TEMA.textoSuave }}>Elegí cómo comprarlo:</div>
+                        {(_puedeUnidad && _puedeCaja) && <div className="text-[11px] mb-2 font-medium" style={{ color: TEMA.textoSuave }}>Elegí cómo comprarlo:</div>}
                         <div className="flex gap-2 mb-3">
-                          <button onClick={() => elegirModo(p, "unidad")} className="flex-1 rounded-xl p-2.5 text-center transition active:scale-95" style={{ background: modo === "unidad" ? TEMA.gold : TEMA.bgSoft, color: modo === "unidad" ? TEMA.bg : TEMA.texto, border: `1px solid ${modo === "unidad" ? TEMA.gold : TEMA.borde}` }}>
+                          {_puedeUnidad && <button onClick={() => elegirModo(p, "unidad")} className="flex-1 rounded-xl p-2.5 text-center transition active:scale-95" style={{ background: modo === "unidad" ? TEMA.gold : TEMA.bgSoft, color: modo === "unidad" ? TEMA.bg : TEMA.texto, border: `1px solid ${modo === "unidad" ? TEMA.gold : TEMA.borde}` }}>
                             <div className="text-[11px] font-bold">Por unidad</div>
                             <div className="text-base font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif" }}>{fmt(p.precio)}</div>
-                          </button>
-                          <button onClick={() => elegirModo(p, "caja")} className="flex-1 rounded-xl p-2.5 text-center transition active:scale-95" style={{ background: modo === "caja" ? TEMA.gold : TEMA.bgSoft, color: modo === "caja" ? TEMA.bg : TEMA.texto, border: `1px solid ${modo === "caja" ? TEMA.gold : TEMA.borde}` }}>
+                          </button>}
+                          {_puedeCaja && <button onClick={() => elegirModo(p, "caja")} className="flex-1 rounded-xl p-2.5 text-center transition active:scale-95" style={{ background: modo === "caja" ? TEMA.gold : TEMA.bgSoft, color: modo === "caja" ? TEMA.bg : TEMA.texto, border: `1px solid ${modo === "caja" ? TEMA.gold : TEMA.borde}` }}>
                             <div className="text-[11px] font-bold">Caja x{p.unidadesBulto}</div>
-                            <div className="text-base font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif" }}>{fmt(p.precio * p.unidadesBulto)}</div>
-                          </button>
+                            <div className="text-base font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif" }}>{fmt(cajaPrecio(p))}</div>
+                          </button>}
                         </div>
                         {modo === "caja"
-                          ? <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>Cada caja trae {p.unidadesBulto} unidades · {fmt(p.precio)} c/u</div>
-                          : (p.minCompra > 1 ? <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>Mínimo {p.minCompra} unidades</div> : <div className="mb-1" />)}
+                          ? <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>Caja de {p.unidadesBulto} u. · cada unidad {fmt(Math.round(cajaPrecio(p) / (p.unidadesBulto || 1)))}</div>
+                          : (_puedeCaja
+                              ? <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>La caja cerrada de {p.unidadesBulto} u. sale {fmt(cajaPrecio(p))}</div>
+                              : (p.minCompra > 1 ? <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>Mínimo {p.minCompra} unidades</div> : <div className="mb-1" />))}
                       </>
                     ) : (
                       <>
