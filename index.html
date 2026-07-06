@@ -285,6 +285,8 @@
         unidadVenta: p.unidad_venta || "ambos",
         unidadesBulto: p.unidades_bulto || 1,
         unidadBulto: p.unidad_bulto || "bulto",
+        vendePor: p.vende_por || "unidad",
+        pesoDisplay: p.peso_display || "kg",
         precioCaja: p.precio_caja || null,
         minCompra: p.min_compra || 1,
         cantDefault: p.cant_default || 1,
@@ -641,6 +643,7 @@ function Tienda() {
       const [soloOfertas, setSoloOfertas] = useState(false);
       const [carrito, setCarrito] = useState({});
       const [modos, setModos] = useState({});   // { [id]: "unidad" | "caja" }
+      const [pesos, setPesos] = useState({});   // { [id]: gramos } para productos por peso
       const [carritoAbierto, setCarritoAbierto] = useState(false);
       const [paso, setPaso] = useState("carrito");   // carrito | revisar | exito
       const [cliNom, setCliNom] = useState("");
@@ -835,13 +838,14 @@ function Tienda() {
       const visibles = useMemo(() => {
         let arr = productos.filter((p) => {
           const okCat = cat === "todos" || p.cat === cat;
-          const okBusq = p.nombre.toLowerCase().includes(busqueda.toLowerCase()) || (p.codigo || "").toLowerCase().includes(busqueda.toLowerCase());
+          const _bq = busqueda.toLowerCase();
+          const okBusq = p.nombre.toLowerCase().includes(_bq) || (p.codigo || "").toLowerCase().includes(_bq) || (p.familia || "").toLowerCase().includes(_bq);
           const okOferta = !soloOfertas || p.promo || p.enOferta;
           return okCat && okBusq && okOferta && (p.activo !== false);
         });
         // Agrupar por familia: cada familia se representa con su portada (1 tarjeta).
-        // Si hay búsqueda activa, NO agrupamos (para poder encontrar variantes puntuales).
-        if (!busqueda) {
+        // Siempre agrupamos (también al buscar): así buscar "AXE" muestra la tarjeta de la familia.
+        {
           const familias = {};
           const agrupado = [];
           arr.forEach((p) => {
@@ -983,7 +987,7 @@ function Tienda() {
                   : (<span style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.gold }} className="text-sm font-extrabold">{fmt(p.precio)}</span>)
                 }
                 {p.unidadesBulto > 1 && !p._esFamilia && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>caja x{p.unidadesBulto}</span>}
-                {p._esFamilia && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>🗂️ {p._nVariantes} opciones</span>}
+                {p._esFamilia && <span className="text-[10px]" style={{ color: TEMA.textoSuave }}>🗂️ {p._nVariantes} variedades</span>}
               </div>
             </div>
             {p._esFamilia ? (
@@ -1002,6 +1006,20 @@ function Tienda() {
       };
 
       const prodById = (id) => productos.find((x) => String(x.id) === String(id));
+      // ── Venta por peso ──
+      const esPeso = (p) => p && p.vendePor === "peso";
+      const fmtPeso = (g) => {   // gramos -> texto lindo
+        g = Math.round(g || 0);
+        if (g >= 1000) { const kg = g / 1000; return (Number.isInteger(kg) ? kg : kg.toFixed(kg < 10 ? 2 : 1).replace(/\.?0+$/,"")) + " kg"; }
+        return g + " g";
+      };
+      const precioPorPeso = (p, gramos) => Math.round(((p.precio || 0) * (gramos || 0) / 1000) * 100) / 100;  // p.precio = precio/kg de la lista
+      const precioDisplayPeso = (p) => {   // texto del precio unitario según peso_display
+        const pk = p.precio || 0;
+        if (p.pesoDisplay === "100g") return fmt(Math.round(pk / 10)) + " /100g";
+        if (p.pesoDisplay === "g") return fmt(Math.round(pk / 1000)) + " /g";
+        return fmt(pk) + " /kg";
+      };
       const umNom = (p) => (p && p.unidadBulto) ? p.unidadBulto : "caja";
       const umNomCap = (p) => { const n = umNom(p); return n.charAt(0).toUpperCase() + n.slice(1); };
       const umPlural = (p, n) => { const u = umNom(p); return n === 1 ? u : (u.endsWith("s") ? u : u + "s"); };
@@ -1099,6 +1117,11 @@ function Tienda() {
         let precioVenta = unitInd * mult;
         let precioUnitFinal = unitInd;
         if (modo === "caja" && p.precioCaja > 0) { precioVenta = p.precioCaja; precioUnitFinal = p.precioCaja / (p.unidadesBulto || 1); }
+        if (esPeso(p)) {
+          const g = pesos[id] || 0;
+          const subP = precioPorPeso(p, g);
+          return { ...p, qty, modo: "peso", gramos: g, precioVenta: subP, precioUnitInd: p.precio, unidadesReales: qty, aplicaPromo: false, subtotal: subP };
+        }
         return { ...p, qty, modo, precioVenta, precioUnitInd: precioUnitFinal, unidadesReales, aplicaPromo, subtotal: precioVenta * qty };
       }).filter(Boolean);
       const totalUnidades = itemsCarrito.reduce((a, i) => a + i.qty, 0);
@@ -1308,7 +1331,7 @@ function Tienda() {
         }
       };
       const avisarWhatsApp = () => {
-        const lineas = itemsCarrito.map((i) => `• ${i.qty}x ${i.nombre} — ${fmt(i.subtotal)}`).join("\n");
+        const lineas = itemsCarrito.map((i) => `• ${i.modo === "peso" ? fmtPeso(i.gramos) : (i.qty + "x")} ${i.nombre} — ${fmt(i.subtotal)}`).join("\n");
         const extra = envio > 0 ? `\nEnvío: ${fmt(envio)}` : "";
         const datos = `Cliente: ${cliNom}` + (cliTel ? `\nTel: ${cliTel}` : "") + (cliDir ? `\nDirección: ${cliDir}` : "");
         const msg = `🛒 *Nuevo pedido por la tienda*\n\n${datos}\n\n${lineas}${extra}\n\n*Total: ${fmt(totalFinal)}*`;
@@ -1540,6 +1563,9 @@ function Tienda() {
             const _puedeCaja = (p.unidadVenta !== "unidad") && p.unidadesBulto > 1;
             const precioSel = modo === "caja" ? cajaPrecio(p) : p.precio;
             const enCarrito = carrito[p.id] || 0;
+            const _esP = esPeso(p);
+            const pesoActual = pesos[p.id] || 0;
+            const setPesoProd = (g) => { g = Math.max(0, Math.round(g||0)); setPesos((prev) => ({ ...prev, [p.id]: g })); setCarrito((prev) => { const n = { ...prev }; if (g > 0) n[p.id] = 1; else delete n[p.id]; return n; }); };
             return (
               <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" onClick={() => setDetalle(null)}>
                 <div className="absolute inset-0" style={{ background: "#000000aa" }} />
@@ -1554,7 +1580,7 @@ function Tienda() {
 
                     {p._esFamilia ? (
                       <div>
-                        <div className="text-[11px] mb-2 font-medium" style={{ color: TEMA.textoSuave }}>Elegí las opciones:</div>
+                        <div className="text-[11px] mb-2 font-medium" style={{ color: TEMA.textoSuave }}>Elegí la variedad:</div>
                         <div className="space-y-2" style={{ maxHeight: "44vh", overflowY: "auto" }}>
                           {[...p._variantes].sort((a, b) => (b.esPortada ? 1 : 0) - (a.esPortada ? 1 : 0) || a.nombre.localeCompare(b.nombre)).map((v) => {
                             const enCar = carrito[v.id] || 0;
@@ -1584,6 +1610,33 @@ function Tienda() {
                         </div>
                         <button onClick={() => setDetalle(null)} className="w-full mt-3 py-2.5 rounded-xl text-sm font-bold" style={{ background: TEMA.gold, color: TEMA.bg }}>✓ Listo</button>
                       </div>
+                    ) : (<>
+                    {_esP ? (
+                      <>
+                        <div className="text-2xl font-extrabold mb-1" style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.gold }}>{precioDisplayPeso(p)}</div>
+                        <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>Se vende por peso · elegí cuánto querés</div>
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {[100, 250, 500, 1000].map((g) => (
+                            <button key={g} onClick={() => setPesoProd(g)} className="px-3 py-1.5 rounded-lg text-sm font-bold transition active:scale-95" style={{ background: pesoActual === g ? TEMA.gold : TEMA.bgSoft, color: pesoActual === g ? TEMA.bg : TEMA.texto, border: `1px solid ${TEMA.borde}` }}>{fmtPeso(g)}</button>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2 mb-3">
+                          <label className="text-[11px] font-bold" style={{ color: TEMA.textoSuave }}>Otro (gramos):</label>
+                          <input type="number" min="0" step="50" value={pesoActual || ""} onChange={(e) => setPesoProd(parseFloat(e.target.value) || 0)} placeholder="ej: 150" className="flex-1 px-3 py-2 rounded-lg text-sm font-bold" style={{ background: TEMA.bgSoft, color: TEMA.texto, border: `1px solid ${TEMA.borde}`, maxWidth: 120 }} />
+                          <span className="text-[11px]" style={{ color: TEMA.textoSuave }}>g</span>
+                        </div>
+                        {pesoActual > 0 && (
+                          <div className="rounded-xl p-3 mb-3 flex items-center justify-between" style={{ background: TEMA.bgSoft }}>
+                            <span className="text-sm font-bold" style={{ color: TEMA.texto }}>{fmtPeso(pesoActual)}</span>
+                            <span className="text-lg font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.gold }}>{fmt(precioPorPeso(p, pesoActual))}</span>
+                          </div>
+                        )}
+                        {enCarrito === 0 || pesoActual === 0 ? (
+                          <button onClick={(e) => { if (pesoActual === 0) setPesoProd(250); agregarConVuelo(p, e); }} className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={18} /> Agregar {pesoActual > 0 ? fmtPeso(pesoActual) : "al carrito"}</button>
+                        ) : (
+                          <button onClick={() => setPesoProd(0)} className="w-full py-2.5 rounded-xl text-sm font-bold transition active:scale-95" style={{ background: TEMA.bgSoft, color: TEMA.texto, border: `1px solid ${TEMA.borde}` }}>Quitar del carrito</button>
+                        )}
+                      </>
                     ) : (<>
                     {tieneCaja ? (
                       <>
@@ -1622,6 +1675,7 @@ function Tienda() {
                         <button onClick={(e) => agregarConVuelo(p, e)} aria-label="Agregar uno" className="px-5 py-1.5"><Plus size={18} style={{ color: TEMA.gold }} /></button>
                       </div>
                     )}
+                    </>)}
                     </>)}
 
                     {/* Comprados juntos: productos que suelen pedirse con este */}
@@ -2025,7 +2079,7 @@ function Tienda() {
                         <div className="rounded-xl divide-y" style={{ background: TEMA.bgCard, border: `1px solid ${TEMA.borde}`, borderColor: TEMA.borde }}>
                           {itemsCarrito.map((i) => (
                             <div key={i.id} className="flex items-center justify-between px-3 py-2" style={{ borderColor: TEMA.borde }}>
-                              <span className="text-sm truncate mr-2"><span style={{ color: TEMA.gold }} className="font-bold">{i.qty}×</span> {i.nombre}</span>
+                              <span className="text-sm truncate mr-2"><span style={{ color: TEMA.gold }} className="font-bold">{i.modo === "peso" ? fmtPeso(i.gramos) : (i.qty + "×")}</span> {i.nombre}</span>
                               <span className="text-sm font-medium shrink-0">{fmt(i.subtotal)}</span>
                             </div>
                           ))}
