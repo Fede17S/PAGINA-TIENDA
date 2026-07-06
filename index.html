@@ -284,6 +284,7 @@
         preciosJson: p.precios || {},
         unidadVenta: p.unidad_venta || "ambos",
         unidadesBulto: p.unidades_bulto || 1,
+        unidadBulto: p.unidad_bulto || "bulto",
         precioCaja: p.precio_caja || null,
         minCompra: p.min_compra || 1,
         cantDefault: p.cant_default || 1,
@@ -937,7 +938,7 @@ function Tienda() {
                      </div>)
                   : (<div className="precio-num text-lg font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.texto }}>{fmt(p.precio)}</div>)
                 }
-                {p.unidadesBulto > 1 && <div className="precio-num text-[11px]" style={{ color: TEMA.textoSuave }}>📦 caja x{p.unidadesBulto}: {fmt(cajaPrecio(p))}</div>}
+                {p.unidadesBulto > 1 && <div className="precio-num text-[11px]" style={{ color: TEMA.textoSuave }}>📦 {p.unidadBulto || "caja"} x{p.unidadesBulto}: {fmt(cajaPrecio(p))}</div>}
                 {p.minCompra > 1 && <div className="text-[11px]" style={{ color: TEMA.textoSuave }}>mínimo {p.minCompra} u.</div>}
                 {p.promo && <div className="precio-num text-[11px]" style={{ color: TEMA.ok }}>{fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
               </div>
@@ -1590,7 +1591,7 @@ function Tienda() {
                             <div className="text-base font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif" }}>{fmt(p.precio)}</div>
                           </button>}
                           {_puedeCaja && <button onClick={() => elegirModo(p, "caja")} className="flex-1 rounded-xl p-2.5 text-center transition active:scale-95" style={{ background: modo === "caja" ? TEMA.gold : TEMA.bgSoft, color: modo === "caja" ? TEMA.bg : TEMA.texto, border: `1px solid ${modo === "caja" ? TEMA.gold : TEMA.borde}` }}>
-                            <div className="text-[11px] font-bold">Caja x{p.unidadesBulto}</div>
+                            <div className="text-[11px] font-bold">{(p.unidadBulto||"caja").charAt(0).toUpperCase()+(p.unidadBulto||"caja").slice(1)} x{p.unidadesBulto}</div>
                             <div className="text-base font-extrabold" style={{ fontFamily: "'DM Sans', sans-serif" }}>{fmt(cajaPrecio(p))}</div>
                           </button>}
                         </div>
