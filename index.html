@@ -1002,6 +1002,9 @@ function Tienda() {
       };
 
       const prodById = (id) => productos.find((x) => String(x.id) === String(id));
+      const umNom = (p) => (p && p.unidadBulto) ? p.unidadBulto : "caja";
+      const umNomCap = (p) => { const n = umNom(p); return n.charAt(0).toUpperCase() + n.slice(1); };
+      const umPlural = (p, n) => { const u = umNom(p); return n === 1 ? u : (u.endsWith("s") ? u : u + "s"); };
       const cajaPrecio = (p) => (p && p.precioCaja > 0) ? p.precioCaja : (((p&&p.precio)||0) * ((p&&p.unidadesBulto)||1));
       const _esSoloCaja = (p) => p && (p.unidadVenta === "caja" || p.unidadVenta === "bulto");
       const modoDe = (id) => modos[id] || (_esSoloCaja(prodById(id)) ? "caja" : "unidad");
@@ -1596,9 +1599,9 @@ function Tienda() {
                           </button>}
                         </div>
                         {modo === "caja"
-                          ? <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>Caja de {p.unidadesBulto} u. · cada unidad {fmt(Math.round(cajaPrecio(p) / (p.unidadesBulto || 1)))}</div>
+                          ? <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>{umNomCap(p)} de {p.unidadesBulto} u. · cada unidad {fmt(Math.round(cajaPrecio(p) / (p.unidadesBulto || 1)))}</div>
                           : (_puedeCaja
-                              ? <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>La caja cerrada de {p.unidadesBulto} u. sale {fmt(cajaPrecio(p))}</div>
+                              ? <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>El {umNom(p)} cerrado de {p.unidadesBulto} u. sale {fmt(cajaPrecio(p))}</div>
                               : (p.minCompra > 1 ? <div className="text-[11px] mb-3" style={{ color: TEMA.textoSuave }}>Mínimo {p.minCompra} unidades</div> : <div className="mb-1" />))}
                       </>
                     ) : (
@@ -1611,11 +1614,11 @@ function Tienda() {
                     {p.promo && <div className="text-xs mb-3" style={{ color: TEMA.ok }}>Promo: {fmt(p.promo.precio)} c/u{p.promo.cant ? ` llevando ${p.promo.cant}+` : ""}</div>}
 
                     {enCarrito === 0 ? (
-                      <button onClick={(e) => agregarConVuelo(p, e)} className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={16} /> Agregar {modo === "caja" ? "caja" : "al carrito"}</button>
+                      <button onClick={(e) => agregarConVuelo(p, e)} className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95" style={{ background: TEMA.gold, color: TEMA.bg }}><Plus size={16} /> Agregar {modo === "caja" ? umNom(p) : "al carrito"}</button>
                     ) : (
                       <div className="w-full py-1.5 rounded-xl flex items-center justify-between" style={{ background: TEMA.bgSoft, border: `1px solid ${TEMA.borde}` }}>
                         <button onClick={() => quitar(p.id)} aria-label="Quitar uno" className="px-5 py-1.5"><Minus size={18} style={{ color: TEMA.gold }} /></button>
-                        <span className="font-bold">{enCarrito} {modo === "caja" ? (enCarrito === 1 ? "caja" : "cajas") : "u."}</span>
+                        <span className="font-bold">{enCarrito} {modo === "caja" ? umPlural(p, enCarrito) : "u."}</span>
                         <button onClick={(e) => agregarConVuelo(p, e)} aria-label="Agregar uno" className="px-5 py-1.5"><Plus size={18} style={{ color: TEMA.gold }} /></button>
                       </div>
                     )}
