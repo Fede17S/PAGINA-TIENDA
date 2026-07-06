@@ -804,6 +804,16 @@ function Tienda() {
 
       const nombreTienda = cfg.nombre || empresa?.nombre || "Mi Tienda";
       const logoEmpresa = empresa?.logo || "";
+      useEffect(() => {
+        document.title = (nombreTienda || "Tienda") + " \u00b7 Tienda";
+        if (logoEmpresa) {
+          try {
+            let link = document.querySelector("link[rel='icon']");
+            if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
+            link.href = logoEmpresa;
+          } catch (e) {}
+        }
+      }, [nombreTienda, logoEmpresa]);
 
       const cmpCat = useMemo(() => {
         const orden = cfg.ordenCategorias || [];
