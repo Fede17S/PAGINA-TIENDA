@@ -902,16 +902,8 @@ function Tienda() {
       // Reiniciar la cantidad mostrada cuando cambian los filtros
       useEffect(() => { setLimite(12); }, [cat, busqueda, soloOfertas, orden, productos]);
 
-      // Scroll infinito: cargar más al acercarse al final
-      useEffect(() => {
-        const node = sentinelRef.current;
-        if (!node) return;
-        const obs = new IntersectionObserver((e) => {
-          if (e[0].isIntersecting) setLimite((l) => l + 12);
-        }, { rootMargin: "500px" });
-        obs.observe(node);
-        return () => obs.disconnect();
-      }, [secciones, limite]);
+      // Carga manual mediante el botón "Ver más productos" (scroll infinito desactivado
+      // para no cargar todas las imágenes de una).
 
       // Tarjeta de producto reutilizable
       const renderCard = (p) => {
@@ -1826,8 +1818,11 @@ function Tienda() {
                   return out;
                 })()}
                 {limite < visibles.length && (
-                  <div ref={sentinelRef} className="py-6 flex items-center justify-center gap-2 text-sm" style={{ color: TEMA.textoSuave }}>
-                    <span className="spinner" style={{ width: 18, height: 18 }} /> Cargando más productos…
+                  <div className="py-6 flex flex-col items-center gap-2">
+                    <button onClick={() => setLimite((l) => l + 12)} className="px-8 py-3 rounded-xl text-sm font-bold transition active:scale-95 shadow" style={{ background: TEMA.gold, color: TEMA.bg }}>
+                      Ver más productos
+                    </button>
+                    <span className="text-xs" style={{ color: TEMA.textoSuave }}>Mostrando {Math.min(limite, visibles.length)} de {visibles.length}</span>
                   </div>
                 )}
               </div>
