@@ -275,7 +275,7 @@
         }
       }
       return {
-        id: p.id, codigo: p.codigo || "", nombre: p.nombre || "Sin nombre",
+        id: p.id, codigo: p.codigo || "", nombre: p.nombre || "Sin nombre", detalles: p.detalles || "",
         cat: p.categoria || "Sin categoría", activo: p.activo !== false, foto: p.foto || "", fotos: Array.isArray(p.fotos) ? p.fotos : [], promo, oferta,
         familia: p.familia || null, esPortada: p.es_portada || false,
         precioClientes: p.precio_clientes || 0,
@@ -343,7 +343,7 @@
       }
       const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo,familia,es_portada";
       const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta,oferta_tipo,oferta_pct,oferta_precios,activo,fotos";
-      const COLS_CAJA = COLS_NEW + ",precio_caja";
+      const COLS_CAJA = COLS_NEW + ",precio_caja,detalles";
       let rows;
       try { rows = await sbGet("productos", `select=${COLS_CAJA}&empresa_id=eq.${empId}&order=nombre.asc`); }
       catch (e0) {
@@ -1577,6 +1577,7 @@ function Tienda() {
                   <div className="p-4">
                     <div className="text-xs mb-1" style={{ color: TEMA.textoSuave }}>{emojiCat(p.cat)} {p.cat}{p.codigo ? ` · ${p.codigo}` : ""}</div>
                     <h2 className="text-lg font-extrabold mb-3" style={{ fontFamily: "'Syne', sans-serif" }}>{p.nombre}</h2>
+                    {p.detalles ? <div className="text-[13px] mb-3" style={{ color: TEMA.textoSuave, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{p.detalles}</div> : null}
 
                     {p._esFamilia ? (
                       <div>
