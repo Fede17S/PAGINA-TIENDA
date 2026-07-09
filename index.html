@@ -183,7 +183,7 @@
     }
 
     async function resolverEmpresa(codigo) {
-      const emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname&codigo=eq.${encodeURIComponent(codigo)}`);
+      const emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname,pago_online,mp_descuento,mp_public_key&codigo=eq.${encodeURIComponent(codigo)}`);
       return emps && emps[0] ? emps[0] : null;
     }
     async function fetchConfig(empId) {
@@ -650,6 +650,7 @@ function Tienda() {
       const [cliTel, setCliTel] = useState("");
       const [cliDir, setCliDir] = useState("");
       const [enviando, setEnviando] = useState(false);
+      const [metodoPago, setMetodoPago] = useState("destino"); // 'destino' | 'mp'
       const [bump, setBump] = useState(0);            // dispara la animación del carrito
       const [splashVisible, setSplashVisible] = useState(true);
       const [splashFade, setSplashFade] = useState(false);
@@ -1144,7 +1145,13 @@ function Tienda() {
             ? Math.min(cuponAplicado.valor, subtotal)
             : Math.round(subtotal * (cuponAplicado.valor / 100) * 100) / 100)
         : 0;
-      const totalFinal = Math.max(0, subtotal - descuentoCupon) + envio;
+      // Pago online con Mercado Pago (opcional por empresa) + descuento por elegirlo
+      const mpHabilitado = !!(empresa && empresa.pago_online);
+      const mpPct = mpHabilitado ? (Number(empresa.mp_descuento) || 0) : 0;
+      const pagaConMp = mpHabilitado && metodoPago === "mp";
+      const baseParaMp = Math.max(0, subtotal - descuentoCupon);
+      const descuentoMp = (pagaConMp && mpPct > 0) ? Math.round(baseParaMp * (mpPct / 100) * 100) / 100 : 0;
+      const totalFinal = Math.max(0, subtotal - descuentoCupon - descuentoMp) + envio;
 
       // Barra de progreso "inteligente": prioriza mínimo, luego envío gratis
       let barColor, barLabel, barPct;
@@ -1183,6 +1190,8 @@ function Tienda() {
           if (cliDir.trim()) obsParts.push(cliDir.trim());
           if (envio > 0) obsParts.push("Envío: " + fmt(envio));
           if (cuponAplicado && descuentoCupon > 0) obsParts.push("Cupón " + cuponAplicado.codigo + " (−" + fmt(descuentoCupon) + ")");
+          if (descuentoMp > 0) obsParts.push("Pago Mercado Pago (−" + mpPct + "%): −" + fmt(descuentoMp));
+          if (pagaConMp) obsParts.push("💳 Pago online (Mercado Pago)");
           // Generar código de seguimiento único (6 caracteres legibles)
           const genCode = () => {
             const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sin caracteres confusos (O,0,I,1,L)
@@ -1205,6 +1214,8 @@ function Tienda() {
             usuario_nom: "Tienda Online",
             estado: "recibido",
             track_code: codigo,
+            pago_metodo: pagaConMp ? "mp" : "destino",
+            pago_estado: "pendiente",
           };
           const r = await fetch(`${SB_URL}/rest/v1/backup_pedidos`, {
             method: "POST",
@@ -1212,6 +1223,41 @@ function Tienda() {
             body: JSON.stringify(body),
           });
           if (!r.ok) throw new Error(await r.text());
+          const creado = await r.json().catch(() => null);
+          const backupId = (Array.isArray(creado) && creado[0]) ? creado[0].id : null;
+          // Si paga con Mercado Pago: crear la preferencia y redirigir al checkout de MP
+          if (pagaConMp && backupId) {
+            try {
+              const pr = await fetch(`${SB_URL}/functions/v1/crear-preferencia-mp`, {
+                method: "POST",
+                headers: { "apikey": SB_KEY, "Authorization": "Bearer " + SB_KEY, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  empresa_id: empresa.id,
+                  backup_id: backupId,
+                  track_code: codigo,
+                  total: totalFinal,
+                  items: itemsBackup,
+                  payer_email: "",
+                  back_url: window.location.href.split("#")[0],
+                }),
+              });
+              const pref = await pr.json();
+              if (pr.ok && pref.init_point) {
+                try { localStorage.setItem("tienda_ultped_" + empresa.codigo, JSON.stringify({ carrito: { ...carrito }, modos: { ...modos }, fecha: new Date().toISOString(), trackCode: codigo })); } catch (_) {}
+                window.location.href = pref.init_point; // redirige a Mercado Pago
+                return;
+              }
+              setTrackCode(codigo);
+              setErrorEnvio("Tu pedido se registró (código " + codigo + "), pero no se pudo iniciar el pago con Mercado Pago. Contactá a la tienda para coordinar el pago.");
+              setPaso("exito");
+              return;
+            } catch (e2) {
+              setTrackCode(codigo);
+              setErrorEnvio("Tu pedido se registró (código " + codigo + "), pero no se pudo abrir Mercado Pago. Contactá a la tienda.");
+              setPaso("exito");
+              return;
+            }
+          }
           // Incrementar el contador de usos del cupón (si se usó uno)
           if (cuponAplicado && cuponAplicado.id) {
             try {
@@ -2092,12 +2138,33 @@ function Tienda() {
                               <span>Envío</span><span>{fmt(envio)}</span>
                             </div>
                           )}
+                          {descuentoMp > 0 && (
+                            <div className="flex items-center justify-between px-3 py-1.5 text-sm" style={{ color: TEMA.ok }}>
+                              <span>Descuento Mercado Pago (−{mpPct}%)</span><span>−{fmt(descuentoMp)}</span>
+                            </div>
+                          )}
                           <div className="flex items-center justify-between px-3 py-2.5">
                             <span className="font-bold">Total</span>
                             <span style={{ fontFamily: "'DM Sans', sans-serif", color: TEMA.gold }} className="text-xl font-extrabold">{fmt(totalFinal)}</span>
                           </div>
                         </div>
                       </div>
+                      {/* Método de pago (solo si la empresa habilitó pago online) */}
+                      {mpHabilitado && (
+                        <div>
+                          <div className="text-xs font-bold mb-2" style={{ color: TEMA.gold }}>¿Cómo querés pagar?</div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button onClick={() => setMetodoPago("destino")} className="rounded-xl p-2.5 text-center transition active:scale-95" style={{ background: metodoPago === "destino" ? TEMA.gold : TEMA.bgSoft, color: metodoPago === "destino" ? TEMA.bg : TEMA.texto, border: `1px solid ${metodoPago === "destino" ? TEMA.gold : TEMA.borde}` }}>
+                              <div className="text-[13px] font-bold">🚚 En destino</div>
+                              <div className="text-[10px]" style={{ color: metodoPago === "destino" ? TEMA.bg : TEMA.textoSuave }}>Pagás al recibir</div>
+                            </button>
+                            <button onClick={() => setMetodoPago("mp")} className="rounded-xl p-2.5 text-center transition active:scale-95" style={{ background: metodoPago === "mp" ? TEMA.gold : TEMA.bgSoft, color: metodoPago === "mp" ? TEMA.bg : TEMA.texto, border: `1px solid ${metodoPago === "mp" ? TEMA.gold : TEMA.borde}` }}>
+                              <div className="text-[13px] font-bold">💳 Mercado Pago</div>
+                              <div className="text-[10px]" style={{ color: metodoPago === "mp" ? TEMA.bg : TEMA.textoSuave }}>{mpPct > 0 ? `Pagás online · −${mpPct}%` : "Pagás online"}</div>
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       {/* Datos del cliente */}
                       <div>
                         <div className="text-xs font-bold mb-2" style={{ color: TEMA.gold }}>Tus datos</div>
@@ -2115,7 +2182,7 @@ function Tienda() {
                         </div>
                       )}
                       <button onClick={confirmarPedido} disabled={enviando} className="w-full py-3.5 rounded-xl font-bold transition active:scale-95 flex items-center justify-center gap-2" style={{ background: TEMA.gold, color: TEMA.bg, opacity: enviando ? .6 : 1 }}>
-                        {enviando ? "Enviando…" : (errorEnvio ? <>Reintentar · {fmt(totalFinal)}</> : <>Confirmar pedido · {fmt(totalFinal)}</>)}
+                        {enviando ? (pagaConMp ? "Redirigiendo a Mercado Pago…" : "Enviando…") : (errorEnvio ? <>Reintentar · {fmt(totalFinal)}</> : (pagaConMp ? <>💳 Pagar con Mercado Pago · {fmt(totalFinal)}</> : <>Confirmar pedido · {fmt(totalFinal)}</>))}
                       </button>
                     </div>
                   </>
