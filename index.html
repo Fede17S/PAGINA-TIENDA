@@ -183,7 +183,14 @@
     }
 
     async function resolverEmpresa(codigo) {
-      const emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname,pago_online,mp_descuento,mp_public_key&codigo=eq.${encodeURIComponent(codigo)}`);
+      // Intento con las columnas de pago online; si no existen (falta el SQL), reintento sin ellas.
+      let emps = null;
+      try {
+        emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname,pago_online,mp_descuento&codigo=eq.${encodeURIComponent(codigo)}`);
+      } catch (e) { emps = null; }
+      if (!emps || !emps.length) {
+        emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname&codigo=eq.${encodeURIComponent(codigo)}`);
+      }
       return emps && emps[0] ? emps[0] : null;
     }
     async function fetchConfig(empId) {
@@ -362,11 +369,18 @@
     // Portadas de familia (foto + título lindo) desde la tabla familias
     async function fetchFamilias(empId) {
       try {
-        const rows = await sbGet("familias", `select=familia,titulo,foto&empresa_id=eq.${empId}`);
+        const rows = await sbGet("familias", `select=familia,titulo,foto,descripcion&empresa_id=eq.${empId}`);
         const m = {};
-        (rows || []).forEach((f) => { m[f.familia] = { titulo: f.titulo || "", foto: f.foto || "" }; });
+        (rows || []).forEach((f) => { m[f.familia] = { titulo: f.titulo || "", foto: f.foto || "", descripcion: f.descripcion || "" }; });
         return m;
-      } catch (e) { return {}; }
+      } catch (e) {
+        try {
+          const rows2 = await sbGet("familias", `select=familia,titulo,foto&empresa_id=eq.${empId}`);
+          const m2 = {};
+          (rows2 || []).forEach((f) => { m2[f.familia] = { titulo: f.titulo || "", foto: f.foto || "", descripcion: "" }; });
+          return m2;
+        } catch (e2) { return {}; }
+      }
     }
 
     // Calcula los productos más pedidos leyendo backup_pedidos (últimos 200 pedidos).
@@ -875,6 +889,8 @@ function Tienda() {
               id: "fam:" + cel._famKey,
               nombre: (port && port.titulo) ? port.titulo : cel._famKey,
               foto: (port && port.foto) ? port.foto : (repr.foto || ""),
+              detalles: (port && port.descripcion) ? "" : repr.detalles,
+              _famDesc: (port && port.descripcion) ? port.descripcion : "",
               _esFamilia: true,
               _famNombre: cel._famKey,
               _variantes: items,
@@ -1630,6 +1646,7 @@ function Tienda() {
 
                     {p._esFamilia ? (
                       <div>
+                        {p._famDesc ? <div className="text-[13px] mb-3" style={{ color: TEMA.textoSuave, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{p._famDesc}</div> : null}
                         <div className="text-[11px] mb-2 font-medium" style={{ color: TEMA.textoSuave }}>Elegí la variedad:</div>
                         <div className="space-y-2" style={{ maxHeight: "44vh", overflowY: "auto" }}>
                           {[...p._variantes].sort((a, b) => (b.esPortada ? 1 : 0) - (a.esPortada ? 1 : 0) || a.nombre.localeCompare(b.nombre)).map((v) => {
