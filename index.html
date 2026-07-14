@@ -186,12 +186,21 @@
       // Intento con las columnas de pago online; si no existen (falta el SQL), reintento sin ellas.
       let emps = null;
       try {
-        emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname,pago_online,mp_descuento&codigo=eq.${encodeURIComponent(codigo)}`);
+        emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname,pago_online,mp_descuento,control_stock&codigo=eq.${encodeURIComponent(codigo)}`);
       } catch (e) { emps = null; }
       if (!emps || !emps.length) {
         emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname&codigo=eq.${encodeURIComponent(codigo)}`);
       }
       return emps && emps[0] ? emps[0] : null;
+    }
+    // Stock por producto (solo si la empresa tiene control de stock activo)
+    async function fetchStock(empId) {
+      try {
+        const rows = await sbGet("stock", `select=codigo,cantidad&empresa_id=eq.${empId}`);
+        const m = {};
+        (rows || []).forEach((s) => { m[String(s.codigo)] = s.cantidad; });
+        return m;
+      } catch (e) { return {}; }
     }
     async function fetchConfig(empId) {
       const rows = await sbGet("tienda_config", `select=config&empresa_id=eq.${empId}`);
@@ -622,6 +631,7 @@ function Tienda() {
         try { localStorage.setItem("tienda_tema", nuevo); } catch (_) {}
       };
       const [productosRaw, setProductosRaw] = useState([]);
+      const [stockMap, setStockMap] = useState({});          // { codigo: cantidad } — solo si control_stock
       const [famPortadas, setFamPortadas] = useState({});   // { familia: {titulo, foto} }
       const [masVendidos, setMasVendidos] = useState([]);   // IDs de productos más pedidos (de backup_pedidos)
       const [compradosJuntos, setCompradosJuntos] = useState({});   // { idProd: [idsSugeridos] }
@@ -709,13 +719,15 @@ function Tienda() {
             const emp = await resolverEmpresa(codigo);
             if (!emp) { setAviso(`No se encontró la empresa con código "${codigo}".`); setCargando(false); return; }
             setEmpresa(emp);
-            const [prods, savedCfg, lists, fams] = await Promise.all([
+            const [prods, savedCfg, lists, fams, stk] = await Promise.all([
               fetchProductos(emp.id),
               fetchConfig(emp.id).catch(() => null),
               fetchListas(emp.id).catch(() => []),
               fetchFamilias(emp.id).catch(() => ({})),
+              emp.control_stock ? fetchStock(emp.id).catch(() => ({})) : Promise.resolve({}),
             ]);
             setProductosRaw(prods);
+            setStockMap(stk);
             setListas(lists);
             setFamPortadas(fams);
             setCfg(mergeCfg(savedCfg));
@@ -851,7 +863,13 @@ function Tienda() {
       }, [productos, cmpCat]);
 
       const visibles = useMemo(() => {
+        const ctrlStock = !!(empresa && empresa.control_stock);
         let arr = productos.filter((p) => {
+          // Control de stock activo: los productos sin stock NO se muestran en la tienda
+          if (ctrlStock) {
+            const q = stockMap[String(p.codigo)];
+            if (q !== undefined && q !== null && q !== "" && Number(q) <= 0) return false;
+          }
           const okCat = cat === "todos" || p.cat === cat;
           const _bq = busqueda.toLowerCase();
           const okBusq = p.nombre.toLowerCase().includes(_bq) || (p.codigo || "").toLowerCase().includes(_bq) || (p.familia || "").toLowerCase().includes(_bq);
@@ -906,7 +924,7 @@ function Tienda() {
         if (orden === "precio-desc") arr = [...arr].sort((a, b) => b.precio - a.precio);
         if (orden === "nombre") arr = [...arr].sort((a, b) => a.nombre.localeCompare(b.nombre));
         return arr;
-      }, [productos, cat, busqueda, orden, soloOfertas, famPortadas]);
+      }, [productos, cat, busqueda, orden, soloOfertas, famPortadas, stockMap, empresa]);
 
       // Armado de secciones: Más pedidos + Ofertas arriba, luego agrupado por categoría
       const secciones = useMemo(() => {
