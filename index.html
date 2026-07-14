@@ -864,11 +864,14 @@ function Tienda() {
 
       const visibles = useMemo(() => {
         const ctrlStock = !!(empresa && empresa.control_stock);
+        // Salvaguarda: si el stock no llegó a cargarse, no filtrar (si no, la tienda quedaría vacía)
+        const stockListo = ctrlStock && stockMap && Object.keys(stockMap).length > 0;
         let arr = productos.filter((p) => {
-          // Control de stock activo: los productos sin stock NO se muestran en la tienda
-          if (ctrlStock) {
+          // Control de stock activo: se muestra SOLO lo que tiene stock positivo
+          // (sin registro de stock = 0 = no se muestra)
+          if (stockListo) {
             const q = stockMap[String(p.codigo)];
-            if (q !== undefined && q !== null && q !== "" && Number(q) <= 0) return false;
+            if (q === undefined || q === null || q === "" || Number(q) <= 0) return false;
           }
           const okCat = cat === "todos" || p.cat === cat;
           const _bq = busqueda.toLowerCase();
