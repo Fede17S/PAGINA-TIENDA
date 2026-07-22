@@ -266,6 +266,10 @@
       if (p.oferta_activa) {
         let vigente = true;
         const ahora = new Date();
+        // Tope de unidades: si ya se vendieron todas, la oferta se apaga
+        if (p.oferta_tope && p.oferta_tope > 0) {
+          vigente = (p.oferta_usadas || 0) < p.oferta_tope;
+        }
         const hoy0 = new Date(); hoy0.setHours(0,0,0,0);
         // Fecha de fin
         if (p.oferta_hasta) {
@@ -380,7 +384,7 @@
       const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo,familia,es_portada";
       const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta,oferta_tipo,oferta_pct,oferta_precios,activo,fotos";
       const COLS_CAJA = COLS_NEW + ",precio_caja,detalles";
-      const COLS_VIG = COLS_CAJA + ",oferta_nombre,oferta_desde,oferta_dias,oferta_hora_desde,oferta_hora_hasta,oferta_listas";
+      const COLS_VIG = COLS_CAJA + ",oferta_nombre,oferta_desde,oferta_dias,oferta_hora_desde,oferta_hora_hasta,oferta_listas,oferta_tope,oferta_usadas";
       let rows;
       rows = await sbGet("productos", `select=${COLS_VIG}&empresa_id=eq.${empId}&order=nombre.asc`).catch(() => null);
       if (!rows) rows = await sbGet("productos", `select=${COLS_CAJA}&empresa_id=eq.${empId}&order=nombre.asc`).catch(() => null);
