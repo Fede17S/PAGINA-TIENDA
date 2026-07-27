@@ -220,13 +220,65 @@
       // Intento con las columnas de pago online; si no existen (falta el SQL), reintento sin ellas.
       let emps = null;
       try {
-        emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname,pago_online,mp_descuento&codigo=eq.${encodeURIComponent(codigo)}`);
+        emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname,pago_online,mp_descuento,control_stock&codigo=eq.${encodeURIComponent(codigo)}`);
       } catch (e) { emps = null; }
+      // Si falló por la columna control_stock (empresa vieja sin ese SQL), reintentar sin ella.
+      if (!emps || !emps.length) {
+        try {
+          emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname,pago_online,mp_descuento&codigo=eq.${encodeURIComponent(codigo)}`);
+        } catch (e) { emps = null; }
+      }
       if (!emps || !emps.length) {
         emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname&codigo=eq.${encodeURIComponent(codigo)}`);
       }
       return emps && emps[0] ? emps[0] : null;
     }
+
+    // ══════════════════════════════════════════════════════════════════
+    // CONTROL DE STOCK
+    // Se activa desde el panel (Configuración → Empresa → "Control de stock").
+    // Hasta ahora la tienda no miraba el stock para nada: un cliente podía pedir
+    // un producto agotado y el pedido entraba igual.
+    //
+    // Devuelve { "CODIGO": disponible } donde disponible = físico − reservado
+    // (lo reservado son pedidos ya tomados que todavía no salieron del depósito).
+    //
+    // Si algo falla — no existe la columna "reservado", la base no deja leer la
+    // tabla, se cortó internet — devuelve null y la tienda se comporta como antes:
+    // no oculta nada. Preferimos mostrar de más antes que dejar la tienda vacía.
+    // ══════════════════════════════════════════════════════════════════
+    async function fetchStockDisponible(empId) {
+      let rows = null;
+      try {
+        rows = await sbGet("stock", `select=codigo,cantidad,reservado&empresa_id=eq.${empId}`);
+      } catch (e) {
+        try { rows = await sbGet("stock", `select=codigo,cantidad&empresa_id=eq.${empId}`); }
+        catch (e2) { console.warn("[Stock] no se pudo leer el stock:", e2.message); return null; }
+      }
+      if (!rows || !rows.length) return null;
+      const m = {};
+      rows.forEach((s) => {
+        if (s == null || s.codigo == null || s.codigo === "") return;
+        m[String(s.codigo)] = Number(s.cantidad || 0) - Number(s.reservado || 0);
+      });
+      return Object.keys(m).length ? m : null;
+    }
+
+    // ¿Este producto se puede vender?
+    // disp = el mapa de arriba, o null cuando el control está apagado / no se pudo leer.
+    // Si el producto NO figura en la tabla de stock, NO lo bloqueamos: puede ser un
+    // producto que la distribuidora nunca cargó en el inventario.
+    function conStock(p, disp) {
+      if (!disp || !p) return true;
+      const kCod = (p.codigo != null && p.codigo !== "") ? String(p.codigo) : null;
+      const kId  = (p.id != null && p.id !== "") ? String(p.id) : null;
+      let v;
+      if (kCod && disp[kCod] !== undefined) v = disp[kCod];
+      else if (kId && disp[kId] !== undefined) v = disp[kId];
+      else return true;
+      return Number(v) > 0;
+    }
+
     async function fetchConfig(empId) {
       const rows = await sbGet("tienda_config", `select=config&empresa_id=eq.${empId}`);
       return rows && rows[0] ? rows[0].config : null;
@@ -651,6 +703,9 @@ function Tienda() {
       const [productosRaw, setProductosRaw] = useState([]);
       const [famPortadas, setFamPortadas] = useState({});   // { familia: {titulo, foto} }
       const [masVendidos, setMasVendidos] = useState([]);   // IDs de productos más pedidos (de backup_pedidos)
+      // Mapa { codigo: disponible } cuando la empresa tiene el control de stock activado.
+      // null = control apagado, o no se pudo leer → no se oculta ningún producto.
+      const [stockDisp, setStockDisp] = useState(null);
       const [compradosJuntos, setCompradosJuntos] = useState({});   // { idProd: [idsSugeridos] }
       const [listas, setListas] = useState([]);
       const [cargando, setCargando] = useState(true);
@@ -665,7 +720,12 @@ function Tienda() {
         return keys[0] || "clientes";
       }, [cfg.listaPrecio, listas]);
       const productos = useMemo(
-        () => productosRaw.map((p) => {
+        // El filtro por stock va acá arriba de todo a propósito: así el producto
+        // agotado desaparece de una sola vez del catálogo, del buscador, de las
+        // categorías, del carrito guardado y del botón "repetir pedido". Si se
+        // filtrara más abajo, quedaría escondido en la vitrina pero se podría
+        // seguir comprando desde el carrito viejo.
+        () => productosRaw.filter((p) => conStock(p, stockDisp)).map((p) => {
           const base = precioEfectivo(p, listaActiva);
           // Si hay oferta vigente y es menor al precio normal, ese es el precio a cobrar
           if (p.oferta && p.oferta.precio > 0 && p.oferta.precio < base) {
@@ -673,7 +733,7 @@ function Tienda() {
           }
           return { ...p, precio: base, precioAntes: null, enOferta: false };
         }),
-        [productosRaw, listaActiva]
+        [productosRaw, listaActiva, stockDisp]
       );
 
       const [cat, setCat] = useState("todos");
@@ -736,13 +796,22 @@ function Tienda() {
             const emp = await resolverEmpresa(codigo);
             if (!emp) { setAviso(`No se encontró la empresa con código "${codigo}".`); setCargando(false); return; }
             setEmpresa(emp);
-            const [prods, savedCfg, lists, fams] = await Promise.all([
+            const [prods, savedCfg, lists, fams, stk] = await Promise.all([
               fetchProductos(emp.id),
               fetchConfig(emp.id).catch(() => null),
               fetchListas(emp.id).catch(() => []),
               fetchFamilias(emp.id).catch(() => ({})),
+              // El stock se pide junto con todo lo demás (es liviano: no trae fotos),
+              // así la tienda ya arranca sin los productos agotados en vez de mostrarlos
+              // medio segundo y después esconderlos.
+              emp.control_stock ? fetchStockDisponible(emp.id).catch(() => null) : Promise.resolve(null),
             ]);
             setProductosRaw(prods);
+            setStockDisp(stk);
+            if (stk) {
+              const _ocultos = prods.filter((p) => !conStock(p, stk)).length;
+              console.log("[Stock] control activo · " + _ocultos + " producto(s) sin stock ocultos de " + prods.length);
+            }
             setListas(lists);
             setFamPortadas(fams);
             setCfg(mergeCfg(savedCfg));
@@ -779,6 +848,29 @@ function Tienda() {
           }
         } catch (e) { /* localStorage no disponible (modo privado) */ }
       }, [empresa]);
+
+      // Si el cliente había dejado el carrito armado y mientras tanto algo se agotó,
+      // el producto ya no está en el catálogo. Lo sacamos del carrito y le avisamos,
+      // así no llega a la pantalla de pagar y le desaparece un renglón sin explicación.
+      const avisoStockRef = useRef(false);
+      useEffect(() => {
+        if (!stockDisp || !productosRaw.length || avisoStockRef.current) return;
+        const vigentes = {};
+        productos.forEach((p) => { vigentes[String(p.id)] = true; });
+        const caidos = Object.keys(carrito).filter((id) => carrito[id] > 0 && !vigentes[String(id)]);
+        if (!caidos.length) return;
+        avisoStockRef.current = true;
+        setCarrito((c) => {
+          const cp = { ...c };
+          caidos.forEach((id) => { delete cp[id]; });
+          return cp;
+        });
+        setTimeout(() => {
+          alert(caidos.length === 1
+            ? "Un producto de tu carrito se quedó sin stock y lo sacamos. Perdón por la molestia."
+            : `${caidos.length} productos de tu carrito se quedaron sin stock y los sacamos. Perdón por la molestia.`);
+        }, 400);
+      }, [stockDisp, productos, productosRaw, carrito]);
 
       // Guardar carrito + datos del cliente ante cualquier cambio
       useEffect(() => {
@@ -1240,6 +1332,28 @@ function Tienda() {
         setErrorEnvio("");
         setEnviando(true);
         try {
+          // Última mirada al stock antes de grabar. El cliente pudo haber dejado la
+          // tienda abierta un rato largo y mientras tanto agotarse algo. Si la lectura
+          // falla seguimos adelante: no vamos a perder una venta por un problema de red.
+          if (empresa.control_stock) {
+            const fresco = await fetchStockDisponible(empresa.id).catch(() => null);
+            if (fresco) {
+              setStockDisp(fresco);
+              const agotados = itemsCarrito.filter((i) => i.id !== "ENVIO" && !conStock(i, fresco));
+              if (agotados.length) {
+                setCarrito((c) => {
+                  const cp = { ...c };
+                  agotados.forEach((i) => { delete cp[String(i.id)]; });
+                  return cp;
+                });
+                setPaso("carrito");
+                alert("Se quedaron sin stock mientras armabas el pedido:\n\n· " +
+                      agotados.map((i) => i.nombre).join("\n· ") +
+                      "\n\nYa los sacamos del carrito. Revisá el pedido y confirmalo de nuevo.");
+                return;
+              }
+            }
+          }
           const itemsBackup = itemsCarrito.map((i) => {
             const esCaja = i.modo === "caja";
             const unidades = i.unidadesReales;
@@ -1288,6 +1402,24 @@ function Tienda() {
           if (!r.ok) throw new Error(await r.text());
           const creado = await r.json().catch(() => null);
           const backupId = (Array.isArray(creado) && creado[0]) ? creado[0].id : null;
+          // Reservar la mercadería, igual que hace el panel cuando carga un pedido a mano.
+          // El disponible baja al instante, así no se le vende lo mismo a dos clientes.
+          // Si el servidor no permite esta llamada, no pasa nada: el pedido ya quedó
+          // grabado y el stock físico se descuenta igual cuando se arma en el depósito.
+          if (backupId && empresa.control_stock) {
+            try {
+              const _res = itemsBackup
+                .filter((i) => i.id !== "ENVIO" && Number(i.c) > 0)
+                .map((i) => ({ codigo: String(i.id), cant: Number(i.c) }));
+              if (_res.length) {
+                await fetch(`${SB_URL}/rest/v1/rpc/stk_reservar`, {
+                  method: "POST",
+                  headers: { ...SB_HDR, "Content-Type": "application/json" },
+                  body: JSON.stringify({ p_empresa: empresa.id, p_ref: String(backupId), p_items: _res, p_usuario: "tienda" }),
+                });
+              }
+            } catch (e) { console.warn("[Stock] no se pudo reservar:", e.message); }
+          }
           // Si paga con Mercado Pago: crear la preferencia y redirigir al checkout de MP
           if (pagaConMp && backupId) {
             try {
