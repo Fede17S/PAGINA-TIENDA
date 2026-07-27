@@ -3,7 +3,41 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Tienda</title>
+
+  <!-- ================================================================
+       PREVIEW AL COMPARTIR EL LINK  ·  v2026.07.27-og
+       Esto es lo que ven WhatsApp / Facebook / Instagram / Telegram
+       cuando alguien pega el link de la tienda.
+       Los robots de esas apps NO ejecutan JavaScript: solo leen estas
+       etiquetas del HTML. Por eso tienen que estar acá, escritas fijas.
+       (El preview personalizado con el nombre y el logo de CADA empresa
+        lo resuelve el archivo /api/og.js en Vercel. Estas etiquetas son
+        el respaldo genérico y funcionan siempre.)
+       ================================================================ -->
+  <title>Tienda online · Catálogo y pedidos</title>
+  <meta name="description" content="Mirá el catálogo con precios actualizados, armá tu pedido y recibilo en tu casa o en tu negocio." />
+  <meta name="theme-color" content="#0a1628" />
+  <meta name="robots" content="index, follow" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Tienda online" />
+  <meta property="og:title" content="Tienda online · Catálogo y pedidos" />
+  <meta property="og:description" content="Mirá el catálogo con precios actualizados, armá tu pedido y recibilo en tu casa o en tu negocio." />
+  <meta property="og:image" content="https://pagina-clientes-pedidos.vercel.app/og.png" />
+  <meta property="og:image:secure_url" content="https://pagina-clientes-pedidos.vercel.app/og.png" />
+  <meta property="og:image:type" content="image/png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Tienda online · Catálogo y pedidos" />
+  <meta property="og:url" content="https://pagina-clientes-pedidos.vercel.app/" />
+  <meta property="og:locale" content="es_AR" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Tienda online · Catálogo y pedidos" />
+  <meta name="twitter:description" content="Mirá el catálogo con precios actualizados, armá tu pedido y recibilo en tu casa o en tu negocio." />
+  <meta name="twitter:image" content="https://pagina-clientes-pedidos.vercel.app/og.png" />
+  <!-- ================================================================ -->
+
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
@@ -186,21 +220,12 @@
       // Intento con las columnas de pago online; si no existen (falta el SQL), reintento sin ellas.
       let emps = null;
       try {
-        emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname,pago_online,mp_descuento,control_stock&codigo=eq.${encodeURIComponent(codigo)}`);
+        emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname,pago_online,mp_descuento&codigo=eq.${encodeURIComponent(codigo)}`);
       } catch (e) { emps = null; }
       if (!emps || !emps.length) {
         emps = await sbGet("empresas", `select=id,codigo,nombre,logo,color,appname&codigo=eq.${encodeURIComponent(codigo)}`);
       }
       return emps && emps[0] ? emps[0] : null;
-    }
-    // Stock por producto (solo si la empresa tiene control de stock activo)
-    async function fetchStock(empId) {
-      try {
-        const rows = await sbGet("stock", `select=codigo,cantidad&empresa_id=eq.${empId}`);
-        const m = {};
-        (rows || []).forEach((s) => { m[String(s.codigo)] = s.cantidad; });
-        return m;
-      } catch (e) { return {}; }
     }
     async function fetchConfig(empId) {
       const rows = await sbGet("tienda_config", `select=config&empresa_id=eq.${empId}`);
@@ -265,34 +290,10 @@
       let oferta = null;
       if (p.oferta_activa) {
         let vigente = true;
-        const ahora = new Date();
-        // Tope de unidades: si ya se vendieron todas, la oferta se apaga
-        if (p.oferta_tope && p.oferta_tope > 0) {
-          vigente = (p.oferta_usadas || 0) < p.oferta_tope;
-        }
-        const hoy0 = new Date(); hoy0.setHours(0,0,0,0);
-        // Fecha de fin
         if (p.oferta_hasta) {
-          vigente = new Date(p.oferta_hasta + "T23:59:59") >= hoy0;
-        }
-        // Fecha de inicio (ofertas programadas)
-        if (vigente && p.oferta_desde) {
-          vigente = new Date(p.oferta_desde + "T00:00:00") <= ahora;
-        }
-        // Días de la semana en que corre
-        if (vigente && Array.isArray(p.oferta_dias) && p.oferta_dias.length) {
-          vigente = p.oferta_dias.map(Number).includes(ahora.getDay());
-        }
-        // Franja horaria (soporta cruzar la medianoche)
-        if (vigente && p.oferta_hora_desde && p.oferta_hora_hasta) {
-          const aMin = ahora.getHours() * 60 + ahora.getMinutes();
-          const toMin = (t) => { const q = ("" + t).split(":"); return (parseInt(q[0]) || 0) * 60 + (parseInt(q[1]) || 0); };
-          const m1 = toMin(p.oferta_hora_desde), m2 = toMin(p.oferta_hora_hasta);
-          vigente = (m1 <= m2) ? (aMin >= m1 && aMin <= m2) : !(aMin < m1 && aMin > m2);
-        }
-        // La tienda muestra la lista "Clientes": si la oferta no aplica a esa lista, no va
-        if (vigente && Array.isArray(p.oferta_listas) && p.oferta_listas.length) {
-          vigente = p.oferta_listas.includes("cli");
+          const hoy = new Date(); hoy.setHours(0,0,0,0);
+          const hasta = new Date(p.oferta_hasta + "T23:59:59");
+          vigente = hasta >= hoy;
         }
         if (vigente) {
           const tipo = p.oferta_tipo || "fijo";
@@ -310,7 +311,7 @@
             else if (p.oferta_precio && p.oferta_precio > 0) precioOf = p.oferta_precio;
           }
           if (precioOf && precioOf > 0 && precioOf < normalCli) {
-            oferta = { precio: precioOf, hasta: p.oferta_hasta || null, nombre: (p.oferta_nombre || "").trim() };
+            oferta = { precio: precioOf, hasta: p.oferta_hasta || null };
           }
         }
       }
@@ -384,12 +385,12 @@
       const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo,familia,es_portada";
       const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta,oferta_tipo,oferta_pct,oferta_precios,activo,fotos";
       const COLS_CAJA = COLS_NEW + ",precio_caja,detalles";
-      const COLS_VIG = COLS_CAJA + ",oferta_nombre,oferta_desde,oferta_dias,oferta_hora_desde,oferta_hora_hasta,oferta_listas,oferta_tope,oferta_usadas";
       let rows;
-      rows = await sbGet("productos", `select=${COLS_VIG}&empresa_id=eq.${empId}&order=nombre.asc`).catch(() => null);
-      if (!rows) rows = await sbGet("productos", `select=${COLS_CAJA}&empresa_id=eq.${empId}&order=nombre.asc`).catch(() => null);
-      if (!rows) rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`).catch(() => null);
-      if (!rows) rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`).catch(() => null);
+      try { rows = await sbGet("productos", `select=${COLS_CAJA}&empresa_id=eq.${empId}&order=nombre.asc`); }
+      catch (e0) {
+        try { rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`); }
+        catch (e) { rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`); }
+      }
       if (!rows) {
         try { const c2 = await idbGet(ckey); if (c2 && c2.data) return c2.data; } catch (e) {}
         return [];
@@ -402,18 +403,11 @@
     // Portadas de familia (foto + título lindo) desde la tabla familias
     async function fetchFamilias(empId) {
       try {
-        const rows = await sbGet("familias", `select=familia,titulo,foto,descripcion&empresa_id=eq.${empId}`);
+        const rows = await sbGet("familias", `select=familia,titulo,foto&empresa_id=eq.${empId}`);
         const m = {};
-        (rows || []).forEach((f) => { m[f.familia] = { titulo: f.titulo || "", foto: f.foto || "", descripcion: f.descripcion || "" }; });
+        (rows || []).forEach((f) => { m[f.familia] = { titulo: f.titulo || "", foto: f.foto || "" }; });
         return m;
-      } catch (e) {
-        try {
-          const rows2 = await sbGet("familias", `select=familia,titulo,foto&empresa_id=eq.${empId}`);
-          const m2 = {};
-          (rows2 || []).forEach((f) => { m2[f.familia] = { titulo: f.titulo || "", foto: f.foto || "", descripcion: "" }; });
-          return m2;
-        } catch (e2) { return {}; }
-      }
+      } catch (e) { return {}; }
     }
 
     // Calcula los productos más pedidos leyendo backup_pedidos (últimos 200 pedidos).
@@ -655,7 +649,6 @@ function Tienda() {
         try { localStorage.setItem("tienda_tema", nuevo); } catch (_) {}
       };
       const [productosRaw, setProductosRaw] = useState([]);
-      const [stockMap, setStockMap] = useState({});          // { codigo: cantidad } — solo si control_stock
       const [famPortadas, setFamPortadas] = useState({});   // { familia: {titulo, foto} }
       const [masVendidos, setMasVendidos] = useState([]);   // IDs de productos más pedidos (de backup_pedidos)
       const [compradosJuntos, setCompradosJuntos] = useState({});   // { idProd: [idsSugeridos] }
@@ -676,7 +669,7 @@ function Tienda() {
           const base = precioEfectivo(p, listaActiva);
           // Si hay oferta vigente y es menor al precio normal, ese es el precio a cobrar
           if (p.oferta && p.oferta.precio > 0 && p.oferta.precio < base) {
-            return { ...p, precio: p.oferta.precio, precioAntes: base, enOferta: true, ofertaNombre: (p.oferta.nombre || "") };
+            return { ...p, precio: p.oferta.precio, precioAntes: base, enOferta: true };
           }
           return { ...p, precio: base, precioAntes: null, enOferta: false };
         }),
@@ -699,7 +692,6 @@ function Tienda() {
       const [cliDir, setCliDir] = useState("");
       const [enviando, setEnviando] = useState(false);
       const [metodoPago, setMetodoPago] = useState("destino"); // 'destino' | 'mp'
-      const [mpAviso, setMpAviso] = useState(null); // {tipo:'ok'|'fail'|'pending', track}
       const [bump, setBump] = useState(0);            // dispara la animación del carrito
       const [splashVisible, setSplashVisible] = useState(true);
       const [splashFade, setSplashFade] = useState(false);
@@ -740,38 +732,17 @@ function Tienda() {
           try {
             const params = new URLSearchParams(window.location.search);
             const codigo = params.get("emp") || EMP_CODIGO_DEFAULT;
-            // ── Retorno de Mercado Pago: procesar resultado y LIMPIAR la URL ──
-            // MP devuelve al cliente con ?mp=success/fail/pending + un montón de parámetros.
-            // Los leemos, avisamos al cliente, y limpiamos la barra para que no quede toda esa basura.
-            const mpRes = params.get("mp");
-            const mpTrack = params.get("track") || "";
-            if (mpRes) {
-              if (mpRes === "success" || params.get("status") === "approved") {
-                setMpAviso({ tipo: "ok", track: mpTrack });
-              } else if (mpRes === "pending") {
-                setMpAviso({ tipo: "pending", track: mpTrack });
-              } else {
-                setMpAviso({ tipo: "fail", track: mpTrack });
-              }
-              // Limpiar la URL: dejar solo ?emp=CODIGO
-              try {
-                const limpia = window.location.pathname + (codigo ? ("?emp=" + encodeURIComponent(codigo)) : "");
-                window.history.replaceState({}, document.title, limpia);
-              } catch (e) {}
-            }
             if (!codigo) { setAviso("Falta el código de empresa. Abrí con ?emp=TUCODIGO en la URL."); setCargando(false); return; }
             const emp = await resolverEmpresa(codigo);
             if (!emp) { setAviso(`No se encontró la empresa con código "${codigo}".`); setCargando(false); return; }
             setEmpresa(emp);
-            const [prods, savedCfg, lists, fams, stk] = await Promise.all([
+            const [prods, savedCfg, lists, fams] = await Promise.all([
               fetchProductos(emp.id),
               fetchConfig(emp.id).catch(() => null),
               fetchListas(emp.id).catch(() => []),
               fetchFamilias(emp.id).catch(() => ({})),
-              emp.control_stock ? fetchStock(emp.id).catch(() => ({})) : Promise.resolve({}),
             ]);
             setProductosRaw(prods);
-            setStockMap(stk);
             setListas(lists);
             setFamPortadas(fams);
             setCfg(mergeCfg(savedCfg));
@@ -881,6 +852,28 @@ function Tienda() {
       const logoEmpresa = empresa?.logo || "";
       useEffect(() => {
         document.title = (nombreTienda || "Tienda") + " \u00b7 Tienda";
+        // Actualizamos tambi\u00e9n las etiquetas de "compartir" ya cargada la empresa.
+        // OJO: el preview real de WhatsApp NO sale de ac\u00e1 (los robots no ejecutan JS);
+        // sale del <head> fijo y de /api/og.js. Esto es s\u00f3lo prolijidad para los
+        // navegadores y para el men\u00fa nativo de compartir del celular.
+        try {
+          const setMeta = (attr, clave, valor) => {
+            if (!valor) return;
+            let el = document.head.querySelector("meta[" + attr + "='" + clave + "']");
+            if (!el) { el = document.createElement("meta"); el.setAttribute(attr, clave); document.head.appendChild(el); }
+            el.setAttribute("content", valor);
+          };
+          const desc = (cfg.tagline || "Cat\u00e1logo online") + " \u2014 Compr\u00e1 online y recib\u00ed tu pedido.";
+          setMeta("property", "og:title", nombreTienda);
+          setMeta("property", "og:site_name", nombreTienda);
+          setMeta("property", "og:description", desc);
+          setMeta("name", "description", desc);
+          setMeta("name", "twitter:title", nombreTienda);
+          setMeta("name", "twitter:description", desc);
+          setMeta("property", "og:url", window.location.href);
+          if (logoEmpresa) { setMeta("property", "og:image", logoEmpresa); setMeta("name", "twitter:image", logoEmpresa); }
+          if (cfg.colorMarca) setMeta("name", "theme-color", cfg.colorMarca);
+        } catch (e) {}
         if (logoEmpresa) {
           try {
             let link = document.querySelector("link[rel='icon']");
@@ -888,7 +881,7 @@ function Tienda() {
             link.href = logoEmpresa;
           } catch (e) {}
         }
-      }, [nombreTienda, logoEmpresa]);
+      }, [nombreTienda, logoEmpresa, cfg.tagline, cfg.colorMarca]);
 
       const cmpCat = useMemo(() => {
         const orden = cfg.ordenCategorias || [];
@@ -907,16 +900,7 @@ function Tienda() {
       }, [productos, cmpCat]);
 
       const visibles = useMemo(() => {
-        const ctrlStock = !!(empresa && empresa.control_stock);
-        // Salvaguarda: si el stock no llegó a cargarse, no filtrar (si no, la tienda quedaría vacía)
-        const stockListo = ctrlStock && stockMap && Object.keys(stockMap).length > 0;
         let arr = productos.filter((p) => {
-          // Control de stock activo: se muestra SOLO lo que tiene stock positivo
-          // (sin registro de stock = 0 = no se muestra)
-          if (stockListo) {
-            const q = stockMap[String(p.codigo)];
-            if (q === undefined || q === null || q === "" || Number(q) <= 0) return false;
-          }
           const okCat = cat === "todos" || p.cat === cat;
           const _bq = busqueda.toLowerCase();
           const okBusq = p.nombre.toLowerCase().includes(_bq) || (p.codigo || "").toLowerCase().includes(_bq) || (p.familia || "").toLowerCase().includes(_bq);
@@ -954,8 +938,6 @@ function Tienda() {
               id: "fam:" + cel._famKey,
               nombre: (port && port.titulo) ? port.titulo : cel._famKey,
               foto: (port && port.foto) ? port.foto : (repr.foto || ""),
-              detalles: (port && port.descripcion) ? "" : repr.detalles,
-              _famDesc: (port && port.descripcion) ? port.descripcion : "",
               _esFamilia: true,
               _famNombre: cel._famKey,
               _variantes: items,
@@ -971,7 +953,7 @@ function Tienda() {
         if (orden === "precio-desc") arr = [...arr].sort((a, b) => b.precio - a.precio);
         if (orden === "nombre") arr = [...arr].sort((a, b) => a.nombre.localeCompare(b.nombre));
         return arr;
-      }, [productos, cat, busqueda, orden, soloOfertas, famPortadas, stockMap, empresa]);
+      }, [productos, cat, busqueda, orden, soloOfertas, famPortadas]);
 
       // Armado de secciones: Más pedidos + Ofertas arriba, luego agrupado por categoría
       const secciones = useMemo(() => {
@@ -1010,7 +992,7 @@ function Tienda() {
             <div data-thumb onClick={() => setDetalle(p)} className="relative h-44 sm:h-48 flex items-center justify-center cursor-pointer" style={{ background: "#fff" }}>
               {p.foto ? <img src={p.foto} alt={p.nombre} className="w-full h-full object-contain p-0.5" loading="lazy" /> : <span className="text-6xl">{emojiCat(p.cat)}</span>}
               {p._esFamilia && <span className="absolute top-2 right-2 text-[10px] font-extrabold px-2 py-0.5 rounded-full" style={{ background: TEMA.gold, color: TEMA.bg, boxShadow: "0 2px 8px #00000055" }}>🗂️ {p._nVariantes}</span>}
-              {p.enOferta && <span className="absolute top-2 left-2 text-[11px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1" style={{ background: TEMA.oferta, color: "#fff", boxShadow: "0 2px 8px #00000055" }}>🔥 {p.ofertaNombre || "OFERTA"}{p.precioAntes && p.precioAntes > 0 ? ` −${Math.round((1 - p.precio / p.precioAntes) * 100)}%` : ""}</span>}
+              {p.enOferta && <span className="absolute top-2 left-2 text-[11px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1" style={{ background: TEMA.oferta, color: "#fff", boxShadow: "0 2px 8px #00000055" }}>🔥 OFERTA{p.precioAntes && p.precioAntes > 0 ? ` −${Math.round((1 - p.precio / p.precioAntes) * 100)}%` : ""}</span>}
               {!p.enOferta && p.promo && <span className="absolute top-2 left-2 text-[11px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1" style={{ background: TEMA.oferta, color: "#fff", boxShadow: "0 2px 8px #00000055" }}>🏷️ PROMO</span>}
               {enCarrito > 0 && <span className="absolute top-2 right-2 text-[11px] font-extrabold w-6 h-6 rounded-full flex items-center justify-center" style={{ background: TEMA.gold, color: TEMA.bg, boxShadow: "0 2px 8px #00000055" }}>{enCarrito}</span>}
             </div>
@@ -1534,19 +1516,6 @@ function Tienda() {
 
       return (
         <div style={{ background: TEMA.bg, color: TEMA.texto, fontFamily: "'DM Sans', sans-serif" }} className="min-h-screen w-full">
-          {/* BANNER RESULTADO DE MERCADO PAGO */}
-          {mpAviso && (
-            <div className="fixed top-0 left-0 right-0 z-[70] px-4 py-3 flex items-center gap-3 shadow-lg"
-              style={{ background: mpAviso.tipo === "ok" ? "#0f8a4a" : mpAviso.tipo === "pending" ? "#b45309" : "#b91c1c", color: "#fff" }}>
-              <span className="text-lg">{mpAviso.tipo === "ok" ? "✅" : mpAviso.tipo === "pending" ? "⏳" : "⚠️"}</span>
-              <div className="flex-1 text-sm font-semibold leading-tight">
-                {mpAviso.tipo === "ok" && <>¡Pago aprobado! {mpAviso.track ? `Tu pedido #${mpAviso.track} está confirmado.` : "Tu pedido está confirmado."}</>}
-                {mpAviso.tipo === "pending" && <>Tu pago quedó pendiente de aprobación. Te avisamos cuando se acredite.</>}
-                {mpAviso.tipo === "fail" && <>El pago no se completó. Podés intentar de nuevo o elegir pago en destino.</>}
-              </div>
-              <button onClick={() => setMpAviso(null)} className="text-white/80 text-xl leading-none px-1" aria-label="Cerrar">✕</button>
-            </div>
-          )}
           {/* SPLASH / PANTALLA DE CARGA */}
           {splashVisible && (
             <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center transition-opacity duration-500"
@@ -1724,7 +1693,6 @@ function Tienda() {
 
                     {p._esFamilia ? (
                       <div>
-                        {p._famDesc ? <div className="text-[13px] mb-3" style={{ color: TEMA.textoSuave, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{p._famDesc}</div> : null}
                         <div className="text-[11px] mb-2 font-medium" style={{ color: TEMA.textoSuave }}>Elegí la variedad:</div>
                         <div className="space-y-2" style={{ maxHeight: "44vh", overflowY: "auto" }}>
                           {[...p._variantes].sort((a, b) => (b.esPortada ? 1 : 0) - (a.esPortada ? 1 : 0) || a.nombre.localeCompare(b.nombre)).map((v) => {
