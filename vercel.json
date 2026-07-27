@@ -1,16 +1,35 @@
 {
-     "headers": [
-       {
-         "source": "/(.*).html",
-         "headers": [
-           { "key": "Content-Type", "value": "text/html; charset=utf-8" }
-         ]
-       },
-       {
-         "source": "/",
-         "headers": [
-           { "key": "Content-Type", "value": "text/html; charset=utf-8" }
-         ]
-       }
-     ]
-   }
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+
+  "headers": [
+    {
+      "source": "/(.*).html",
+      "headers": [
+        { "key": "Content-Type", "value": "text/html; charset=utf-8" }
+      ]
+    },
+    {
+      "source": "/",
+      "headers": [
+        { "key": "Content-Type", "value": "text/html; charset=utf-8" }
+      ]
+    }
+  ],
+
+  "rewrites": [
+    {
+      "source": "/",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": ".*([Ww]hats[Aa]pp|facebookexternalhit|[Ff]acebot|[Tt]witterbot|[Tt]elegram[Bb]ot|[Ll]inked[Ii]n[Bb]ot|[Dd]iscordbot|[Ss]lackbot|[Pp]interest|SkypeUriPreview|vkShare|redditbot|[Ii]framely|[Ee]mbedly|[Ss]ignal|[Vv]iber|[Mm]astodon|[Ww]hatsapp).*"
+        }
+      ],
+      "missing": [
+        { "type": "query", "key": "og" }
+      ],
+      "destination": "/api/og"
+    }
+  ]
+}
