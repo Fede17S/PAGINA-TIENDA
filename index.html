@@ -240,26 +240,27 @@
     // Hasta ahora la tienda no miraba el stock para nada: un cliente podía pedir
     // un producto agotado y el pedido entraba igual.
     //
-    // Devuelve { "CODIGO": disponible } donde disponible = físico − reservado
-    // (lo reservado son pedidos ya tomados que todavía no salieron del depósito).
+    // Devuelve { "CODIGO": unidades en depósito }. Ya no existen las reservas:
+    // la mercadería sale del stock apenas se confirma el pedido.
     //
-    // Si algo falla — no existe la columna "reservado", la base no deja leer la
-    // tabla, se cortó internet — devuelve null y la tienda se comporta como antes:
+    // Si algo falla — la base no deja leer la tabla, se cortó internet —
+    // devuelve null y la tienda se comporta como antes:
     // no oculta nada. Preferimos mostrar de más antes que dejar la tienda vacía.
     // ══════════════════════════════════════════════════════════════════
     async function fetchStockDisponible(empId) {
       let rows = null;
       try {
-        rows = await sbGet("stock", `select=codigo,cantidad,reservado&empresa_id=eq.${empId}`);
+        rows = await sbGet("stock", `select=codigo,cantidad&empresa_id=eq.${empId}`);
       } catch (e) {
-        try { rows = await sbGet("stock", `select=codigo,cantidad&empresa_id=eq.${empId}`); }
-        catch (e2) { console.warn("[Stock] no se pudo leer el stock:", e2.message); return null; }
+        console.warn("[Stock] no se pudo leer el stock:", e.message); return null;
       }
       if (!rows || !rows.length) return null;
+      // Ya no existen las reservas: la mercadería sale del stock apenas se
+      // confirma el pedido, así que lo disponible es lo que hay en el depósito.
       const m = {};
       rows.forEach((s) => {
         if (s == null || s.codigo == null || s.codigo === "") return;
-        m[String(s.codigo)] = Number(s.cantidad || 0) - Number(s.reservado || 0);
+        m[String(s.codigo)] = Number(s.cantidad || 0);
       });
       return Object.keys(m).length ? m : null;
     }
@@ -1402,23 +1403,29 @@ function Tienda() {
           if (!r.ok) throw new Error(await r.text());
           const creado = await r.json().catch(() => null);
           const backupId = (Array.isArray(creado) && creado[0]) ? creado[0].id : null;
-          // Reservar la mercadería, igual que hace el panel cuando carga un pedido a mano.
-          // El disponible baja al instante, así no se le vende lo mismo a dos clientes.
-          // Si el servidor no permite esta llamada, no pasa nada: el pedido ya quedó
-          // grabado y el stock físico se descuenta igual cuando se arma en el depósito.
+          // La mercadería SALE del stock apenas el cliente confirma, igual que
+          // cuando el vendedor envía un pedido desde el panel. Por atrás son dos
+          // pasos con la misma referencia (reservar + salida): el físico baja una
+          // sola vez y no queda nada "reservado". Vuelve al stock solo si el admin
+          // rechaza o borra el pedido, o por una devolución aprobada.
           if (backupId && empresa.control_stock) {
             try {
               const _res = itemsBackup
                 .filter((i) => i.id !== "ENVIO" && Number(i.c) > 0)
                 .map((i) => ({ codigo: String(i.id), cant: Number(i.c) }));
               if (_res.length) {
-                await fetch(`${SB_URL}/rest/v1/rpc/stk_reservar`, {
+                const _payload = { p_empresa: empresa.id, p_ref: String(backupId), p_items: _res, p_usuario: "tienda" };
+                const _rpc = (fn) => fetch(`${SB_URL}/rest/v1/rpc/${fn}`, {
                   method: "POST",
                   headers: { ...SB_HDR, "Content-Type": "application/json" },
-                  body: JSON.stringify({ p_empresa: empresa.id, p_ref: String(backupId), p_items: _res, p_usuario: "tienda" }),
+                  body: JSON.stringify(_payload),
                 });
+                const _rr = await _rpc("stk_reservar");
+                let _repetido = false;
+                try { const _j = await _rr.clone().json(); _repetido = !!(_j && _j.repetido); } catch (e) {}
+                if (!_repetido) { await _rpc("stk_salida"); }
               }
-            } catch (e) { console.warn("[Stock] no se pudo reservar:", e.message); }
+            } catch (e) { console.warn("[Stock] no se pudo descontar:", e.message); }
           }
           // Si paga con Mercado Pago: crear la preferencia y redirigir al checkout de MP
           if (pagaConMp && backupId) {
