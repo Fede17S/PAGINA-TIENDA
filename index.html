@@ -1408,11 +1408,20 @@ function Tienda() {
           // pasos con la misma referencia (reservar + salida): el físico baja una
           // sola vez y no queda nada "reservado". Vuelve al stock solo si el admin
           // rechaza o borra el pedido, o por una devolución aprobada.
-          if (backupId && empresa.control_stock) {
+          if (backupId) {
             try {
-              const _res = itemsBackup
+              let _res = itemsBackup
                 .filter((i) => i.id !== "ENVIO" && Number(i.c) > 0)
                 .map((i) => ({ codigo: String(i.id), cant: Number(i.c) }));
+              // Sin el control de stock activado se descuenta igual (como el
+              // vendedor), pero SOLO los productos que ya tienen stock cargado:
+              // a la empresa que no lleva inventario no le inventamos filas.
+              if (_res.length && !empresa.control_stock) {
+                const _codes = _res.map((i) => encodeURIComponent('"' + String(i.codigo).replace(/"/g, "") + '"')).join(",");
+                const _rows = await sbGet("stock", `select=codigo&empresa_id=eq.${empresa.id}&codigo=in.(${_codes})`).catch(() => null);
+                const _have = new Set((_rows || []).map((s) => String(s.codigo)));
+                _res = _res.filter((i) => _have.has(i.codigo));
+              }
               if (_res.length) {
                 const _payload = { p_empresa: empresa.id, p_ref: String(backupId), p_items: _res, p_usuario: "tienda" };
                 const _rpc = (fn) => fetch(`${SB_URL}/rest/v1/rpc/${fn}`, {
@@ -1421,9 +1430,26 @@ function Tienda() {
                   body: JSON.stringify(_payload),
                 });
                 const _rr = await _rpc("stk_reservar");
-                let _repetido = false;
-                try { const _j = await _rr.clone().json(); _repetido = !!(_j && _j.repetido); } catch (e) {}
-                if (!_repetido) { await _rpc("stk_salida"); }
+                if (_rr.ok) {
+                  let _repetido = false;
+                  try { const _j = await _rr.clone().json(); _repetido = !!(_j && _j.repetido); } catch (e) {}
+                  if (!_repetido) { await _rpc("stk_salida"); }
+                } else {
+                  // PLAN B: la función no está en la base — descuento directo,
+                  // fila por fila, sobre la tabla de stock.
+                  console.warn("[Stock] motor no disponible — descuento directo");
+                  for (const it of _res) {
+                    try {
+                      const cur = await sbGet("stock", `select=cantidad&empresa_id=eq.${empresa.id}&codigo=eq.${encodeURIComponent(it.codigo)}`);
+                      if (!cur || !cur.length) continue;
+                      await fetch(`${SB_URL}/rest/v1/stock?empresa_id=eq.${empresa.id}&codigo=eq.${encodeURIComponent(it.codigo)}`, {
+                        method: "PATCH",
+                        headers: { ...SB_HDR, "Content-Type": "application/json" },
+                        body: JSON.stringify({ cantidad: Number(cur[0].cantidad || 0) - it.cant, updated_at: new Date().toISOString() }),
+                      });
+                    } catch (e2) { console.warn("[Stock] descuento directo:", e2.message); }
+                  }
+                }
               }
             } catch (e) { console.warn("[Stock] no se pudo descontar:", e.message); }
           }
