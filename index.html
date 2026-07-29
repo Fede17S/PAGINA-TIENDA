@@ -5067,7 +5067,7 @@ function Tienda() {
       color: TEMA.textoSuave,
       opacity: .5
     }
-  }, "v2026.07.28-vitrina"), /*#__PURE__*/React.createElement("div", {
+  }, "v2026.07.29-cond"), /*#__PURE__*/React.createElement("div", {
     className: "h-24 md:hidden"
   })), carritoAbierto && paso === "exito" && /*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 z-50 overflow-hidden flex flex-col items-center justify-center px-6",
@@ -5799,29 +5799,27 @@ function Tienda() {
     className: "rounded-xl px-3 py-2.5",
     style: {
       background: TEMA.bgCard,
-      border: `1px solid ${TEMA.borde}`
+      border: `1px solid ${TEMA.gold}`
     }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setVerCond(v => !v),
-    className: "w-full flex items-center justify-between gap-2 text-left"
-  }, /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("div", {
     className: "text-[12px] font-bold flex items-center gap-1.5",
     style: {
       color: TEMA.gold
     }
   }, /*#__PURE__*/React.createElement(FileText, {
     size: 14
-  }), " Condiciones de venta"), /*#__PURE__*/React.createElement("span", {
-    className: "text-[11px] shrink-0",
-    style: {
-      color: TEMA.textoSuave
-    }
-  }, verCond ? "Ocultar" : "Ver")), verCond && /*#__PURE__*/React.createElement("div", {
+  }), " Condiciones de venta"), /*#__PURE__*/React.createElement("div", {
     className: "text-[12px] mt-2 leading-relaxed whitespace-pre-line",
     style: {
       color: TEMA.textoSuave
     }
-  }, condiciones))), /*#__PURE__*/React.createElement("div", {
+  }, condiciones), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-2 pt-2 leading-snug",
+    style: {
+      color: TEMA.textoSuave,
+      borderTop: `1px solid ${TEMA.borde}`
+    }
+  }, "Al confirmar el pedido aceptás estas condiciones."))), /*#__PURE__*/React.createElement("div", {
     className: "px-4 py-3",
     style: {
       borderTop: `1px solid ${TEMA.borde}`
