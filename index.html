@@ -830,7 +830,7 @@ async function fetchStockDisponible(empId) {
     console.warn("[Stock] no se pudo leer el stock:", e.message);
     return null;
   }
-  if (!rows || !rows.length) return null;
+  if (!rows) return null;
   // Ya no existen las reservas: la mercadería sale del stock apenas se
   // confirma el pedido, así que lo disponible es lo que hay en el depósito.
   const m = {};
@@ -838,7 +838,7 @@ async function fetchStockDisponible(empId) {
     if (s == null || s.codigo == null || s.codigo === "") return;
     m[String(s.codigo)] = Number(s.cantidad || 0);
   });
-  return Object.keys(m).length ? m : null;
+  return m;
 }
 
 // ¿Este producto se puede vender?
@@ -1193,19 +1193,44 @@ async function fetchProductos(empId) {
 }
 
 // Portadas de familia (foto + título lindo) desde la tabla familias
+function leerMetaFamilia(descripcion) {
+  const raw = String(descripcion || "");
+  const m = raw.match(/^\[\[MIN_FAMILIA:(\d+)\]\]\s*/);
+  return {
+    descripcion: raw.replace(/^\[\[MIN_FAMILIA:\d+\]\]\s*/, ""),
+    minCompra: m ? Math.max(1, parseInt(m[1], 10) || 1) : 1
+  };
+}
 async function fetchFamilias(empId) {
   try {
-    const rows = await sbGet("familias", `select=familia,titulo,foto&empresa_id=eq.${empId}`);
+    const rows = await sbGet("familias", `select=familia,titulo,foto,descripcion&empresa_id=eq.${empId}`);
     const m = {};
     (rows || []).forEach(f => {
+      const meta = leerMetaFamilia(f.descripcion);
       m[f.familia] = {
         titulo: f.titulo || "",
-        foto: f.foto || ""
+        foto: f.foto || "",
+        descripcion: meta.descripcion,
+        minCompra: meta.minCompra
       };
     });
     return m;
   } catch (e) {
-    return {};
+    try {
+      const rows = await sbGet("familias", `select=familia,titulo,foto&empresa_id=eq.${empId}`);
+      const m = {};
+      (rows || []).forEach(f => {
+        m[f.familia] = {
+          titulo: f.titulo || "",
+          foto: f.foto || "",
+          descripcion: "",
+          minCompra: 1
+        };
+      });
+      return m;
+    } catch (e2) {
+      return {};
+    }
   }
 }
 
@@ -2004,7 +2029,7 @@ function Tienda() {
         // El stock se pide junto con todo lo demás (es liviano: no trae fotos),
         // así la tienda ya arranca sin los productos agotados en vez de mostrarlos
         // medio segundo y después esconderlos.
-        emp.control_stock ? fetchStockDisponible(emp.id).catch(() => null) : Promise.resolve(null)]);
+        fetchStockDisponible(emp.id).catch(() => null)]);
         setProductosRaw(prods);
         setStockDisp(stk);
         if (stk) {
@@ -2054,29 +2079,54 @@ function Tienda() {
   // Si el cliente había dejado el carrito armado y mientras tanto algo se agotó,
   // el producto ya no está en el catálogo. Lo sacamos del carrito y le avisamos,
   // así no llega a la pantalla de pagar y le desaparece un renglón sin explicación.
-  const avisoStockRef = useRef(false);
   useEffect(() => {
-    if (!stockDisp || !productosRaw.length || avisoStockRef.current) return;
-    const vigentes = {};
-    productos.forEach(p => {
-      vigentes[String(p.id)] = true;
+    if (!empresa) return;
+    let activo = true;
+    const refrescarStock = async () => {
+      const fresco = await fetchStockDisponible(empresa.id).catch(() => null);
+      if (activo && fresco !== null) setStockDisp(fresco);
+    };
+    const alVolver = () => {
+      if (document.visibilityState === "visible") refrescarStock();
+    };
+    const timer = setInterval(refrescarStock, 10000);
+    window.addEventListener("focus", refrescarStock);
+    document.addEventListener("visibilitychange", alVolver);
+    return () => {
+      activo = false;
+      clearInterval(timer);
+      window.removeEventListener("focus", refrescarStock);
+      document.removeEventListener("visibilitychange", alVolver);
+    };
+  }, [empresa]);
+
+  const avisoStockRef = useRef("");
+  useEffect(() => {
+    if (stockDisp === null || !productosRaw.length) return;
+    const ajustes = [];
+    const siguiente = { ...carrito };
+    Object.keys(carrito).forEach(id => {
+      const p = productosRaw.find(x => String(x.id) === String(id));
+      if (!p || !carrito[id]) return;
+      const disponible = stockDe(p, stockDisp);
+      if (disponible === null) return;
+      const modo = modos[id] || (p.unidadVenta === "caja" || p.unidadVenta === "bulto" ? "caja" : "unidad");
+      const mult = modo === "caja" ? Number(p.unidadesBulto || 1) : 1;
+      const maximo = esPeso(p) ? (disponible > 0 ? 1 : 0) : Math.max(0, Math.floor(disponible / mult));
+      if (Number(carrito[id]) > maximo) {
+        if (maximo > 0) siguiente[id] = maximo;else delete siguiente[id];
+        ajustes.push({ nombre: p.nombre, maximo });
+      }
     });
-    const caidos = Object.keys(carrito).filter(id => carrito[id] > 0 && !vigentes[String(id)]);
-    if (!caidos.length) return;
-    avisoStockRef.current = true;
-    setCarrito(c => {
-      const cp = {
-        ...c
-      };
-      caidos.forEach(id => {
-        delete cp[id];
-      });
-      return cp;
-    });
+    if (!ajustes.length) return;
+    setCarrito(siguiente);
+    const firma = ajustes.map(a => a.nombre + ":" + a.maximo).join("|");
+    if (avisoStockRef.current === firma) return;
+    avisoStockRef.current = firma;
     setTimeout(() => {
-      alert(caidos.length === 1 ? "Un producto de tu carrito se quedó sin stock y lo sacamos. Perdón por la molestia." : `${caidos.length} productos de tu carrito se quedaron sin stock y los sacamos. Perdón por la molestia.`);
-    }, 400);
-  }, [stockDisp, productos, productosRaw, carrito]);
+      alert("El stock cambió mientras armabas el pedido:\n\n" + ajustes.map(a => a.maximo > 0 ? `· ${a.nombre}: cantidad ajustada a ${a.maximo}` : `· ${a.nombre}: sin stock, se quitó del carrito`).join("\n"));
+    }, 200);
+  }, [stockDisp, productosRaw, carrito, modos]);
 
   // Guardar carrito + datos del cliente ante cualquier cambio
   useEffect(() => {
@@ -2288,10 +2338,11 @@ function Tienda() {
           nombre: port && port.titulo ? port.titulo : cel._famKey,
           foto: port && port.foto ? port.foto : repr.foto || "",
           _esFamilia: true,
-          _famNombre: cel._famKey,
-          _variantes: items,
-          _nVariantes: items.length,
-          precio: minP,
+           _famNombre: cel._famKey,
+           _variantes: items,
+           _nVariantes: items.length,
+           _minFamilia: port && port.minCompra > 1 ? port.minCompra : 1,
+           precio: minP,
           precioAntes: null,
           enOferta: hayOferta,
           promo: hayPromo ? repr.promo : null
@@ -2758,35 +2809,58 @@ function Tienda() {
   const _esSoloCaja = p => p && (p.unidadVenta === "caja" || p.unidadVenta === "bulto");
   const modoDe = id => modos[id] || (_esSoloCaja(prodById(id)) ? "caja" : "unidad");
   const precioVentaDe = p => modoDe(p.id) === "caja" ? cajaPrecio(p) : p.precio;
-  const qtyInicialDe = p => modoDe(p.id) === "caja" ? 1 : Math.max(p.minCompra || 1, p.cantDefault || 1);
-  const minDe = p => modoDe(p.id) === "caja" ? 1 : p.minCompra || 1;
+  const tieneMinFamilia = p => !!(p && p.familia && famPortadas[p.familia] && Number(famPortadas[p.familia].minCompra) > 1);
+  const qtyInicialDe = p => modoDe(p.id) === "caja" ? 1 : tieneMinFamilia(p) ? 1 : Math.max(p.minCompra || 1, p.cantDefault || 1);
+  const minDe = p => modoDe(p.id) === "caja" ? 1 : tieneMinFamilia(p) ? 1 : p.minCompra || 1;
+  const maxCantidadStock = (p, modoElegido) => {
+    const disponible = stockDe(p, stockDisp);
+    if (disponible === null) return Infinity;
+    if (esPeso(p)) return disponible > 0 ? 1 : 0;
+    const modo = modoElegido || modoDe(p.id);
+    const mult = modo === "caja" ? Number(p.unidadesBulto || 1) : 1;
+    return Math.max(0, Math.floor(disponible / mult));
+  };
   const elegirModo = (p, modo) => {
+    const maximo = maxCantidadStock(p, modo);
+    if (maximo < 1) {
+      alert(modo === "caja" ? `No hay stock suficiente para una ${umNom(p)} completa.` : "Este producto se quedó sin stock.");
+      return;
+    }
     setModos(m => ({
       ...m,
       [p.id]: modo
     }));
     setCarrito(c => {
       if (!c[p.id]) return c;
-      const ini = modo === "caja" ? 1 : Math.max(p.minCompra || 1, p.cantDefault || 1);
+      const ini = modo === "caja" ? 1 : tieneMinFamilia(p) ? 1 : Math.max(p.minCompra || 1, p.cantDefault || 1);
       return {
         ...c,
-        [p.id]: ini
+        [p.id]: Math.min(ini, maximo)
       };
     });
   };
   const agregar = id => {
     const p = prodById(id);
+    if (!p) return false;
+    const maximo = maxCantidadStock(p);
+    const actual = Number(carrito[id] || 0);
+    const inicial = qtyInicialDe(p);
+    const nueva = actual === 0 ? inicial : actual + 1;
+    if (maximo < 1 || nueva > maximo) {
+      alert(maximo < 1 ? "Este producto se quedó sin stock." : `Solo quedan ${maximo} ${modoDe(id) === "caja" ? umPlural(p, maximo) : maximo === 1 ? "unidad" : "unidades"} disponibles.`);
+      return false;
+    }
     setCarrito(c => {
-      const actual = c[id] || 0;
-      const nueva = actual === 0 ? p ? qtyInicialDe(p) : 1 : actual + 1;
       return {
         ...c,
         [id]: nueva
       };
     });
     setBump(b => b + 1);
+    return true;
   };
   const agregarConVuelo = (p, e) => {
+    if (!agregar(p.id)) return;
     try {
       const card = e.currentTarget.closest("[data-prod]");
       const thumb = card ? card.querySelector("[data-thumb]") : null;
@@ -2806,7 +2880,6 @@ function Tienda() {
         setFlyers(arr => [...arr, fly]);
       }
     } catch (err) {/* si algo falla, igual agrega */}
-    agregar(p.id);
   };
   const quitar = id => {
     const p = prodById(id);
@@ -2842,6 +2915,15 @@ function Tienda() {
         delete cp[id];
       } else {
         if (n < min) n = min; // respeta el mínimo del producto
+        const maximo = p ? maxCantidadStock(p) : Infinity;
+        if (n > maximo) {
+          n = maximo;
+          setTimeout(() => alert(maximo > 0 ? `Solo quedan ${maximo} disponibles.` : "Este producto se quedó sin stock."), 0);
+        }
+        if (n < 1) {
+          delete cp[id];
+          return cp;
+        }
         cp[id] = n;
       }
       return cp;
@@ -2903,6 +2985,21 @@ function Tienda() {
   }).filter(Boolean);
   const totalUnidades = itemsCarrito.reduce((a, i) => a + i.qty, 0);
   const totalPesos = itemsCarrito.reduce((a, i) => a + i.subtotal, 0);
+  const totalesFamilia = itemsCarrito.reduce((m, i) => {
+    if (i.familia) m[i.familia] = (m[i.familia] || 0) + (i.unidadesReales || i.qty || 0);
+    return m;
+  }, {});
+  const faltantesFamilia = Object.entries(totalesFamilia).map(([familia, cantidad]) => {
+    const min = Math.max(1, Number(famPortadas[familia] && famPortadas[familia].minCompra) || 1);
+    return {
+      familia,
+      cantidad,
+      minimo: min,
+      faltan: Math.max(0, min - cantidad)
+    };
+  }).filter(x => x.cantidad > 0 && x.faltan > 0);
+  const cumpleMinFamilias = faltantesFamilia.length === 0;
+  const primerFaltanteFamilia = faltantesFamilia[0] || null;
   // ── Reglas de compra y envío ──
   const compraMinima = cfg.compraMinima || 0;
   const envioGratisDesde = cfg.envioGratisDesde || 0;
@@ -2935,7 +3032,11 @@ function Tienda() {
 
   // Barra de progreso "inteligente": prioriza mínimo, luego envío gratis
   let barColor, barLabel, barPct;
-  if (!cumpleMinimo) {
+  if (!cumpleMinFamilias) {
+    barColor = TEMA.oferta;
+    barPct = Math.min(100, primerFaltanteFamilia.cantidad / primerFaltanteFamilia.minimo * 100);
+    barLabel = `${primerFaltanteFamilia.familia}: mínimo combinado ${primerFaltanteFamilia.minimo} u. · faltan ${primerFaltanteFamilia.faltan}`;
+  } else if (!cumpleMinimo) {
     barColor = TEMA.oferta;
     barPct = Math.min(100, subtotal / minimoAplica * 100);
     barLabel = `Compra mínima ${fmt(minimoAplica)} · te faltan ${fmt(faltaMinimo)}`;
@@ -2992,6 +3093,11 @@ function Tienda() {
   // Inserta el pedido en backup_pedidos (sección Backup Pedidos de tu app)
   const confirmarPedido = async () => {
     if (!empresa) return;
+    if (!cumpleMinFamilias) {
+      alert("Falta completar el mínimo combinado por familia:\n\n" + faltantesFamilia.map(f => `· ${f.familia}: llevás ${f.cantidad} de ${f.minimo} (faltan ${f.faltan})`).join("\n"));
+      setPaso("carrito");
+      return;
+    }
     if (!cliNom.trim()) {
       alert("Poné tu nombre o el de tu comercio para continuar.");
       return;
@@ -3015,29 +3121,33 @@ function Tienda() {
     setErrorEnvio("");
     setEnviando(true);
     try {
-      // Última mirada al stock antes de grabar. El cliente pudo haber dejado la
-      // tienda abierta un rato largo y mientras tanto agotarse algo. Si la lectura
-      // falla seguimos adelante: no vamos a perder una venta por un problema de red.
-      if (empresa.control_stock) {
-        const fresco = await fetchStockDisponible(empresa.id).catch(() => null);
-        if (fresco) {
-          setStockDisp(fresco);
-          const agotados = itemsCarrito.filter(i => i.id !== "ENVIO" && !conStock(i, fresco));
-          if (agotados.length) {
-            setCarrito(c => {
-              const cp = {
-                ...c
-              };
-              agotados.forEach(i => {
-                delete cp[String(i.id)];
-              });
-              return cp;
-            });
-            setPaso("carrito");
-            alert("Se quedaron sin stock mientras armabas el pedido:\n\n· " + agotados.map(i => i.nombre).join("\n· ") + "\n\nYa los sacamos del carrito. Revisá el pedido y confirmalo de nuevo.");
-            return;
-          }
-        }
+      // Relectura obligatoria: no se confirma usando el stock que quedó en pantalla.
+      const fresco = await fetchStockDisponible(empresa.id).catch(() => null);
+      if (fresco === null) {
+        throw new Error("STOCK_NO_VERIFICADO");
+      }
+      setStockDisp(fresco);
+      const insuficientes = itemsCarrito.map(i => {
+        const disponible = stockDe(i, fresco);
+        if (disponible === null || Number(i.unidadesReales || 0) <= disponible) return null;
+        const mult = i.modo === "caja" ? Number(i.unidadesBulto || 1) : 1;
+        return {
+          ...i,
+          disponible,
+          maxCarrito: Math.max(0, Math.floor(disponible / mult))
+        };
+      }).filter(Boolean);
+      if (insuficientes.length) {
+        setCarrito(c => {
+          const cp = { ...c };
+          insuficientes.forEach(i => {
+            if (i.maxCarrito > 0) cp[String(i.id)] = i.maxCarrito;else delete cp[String(i.id)];
+          });
+          return cp;
+        });
+        setPaso("carrito");
+        alert("El stock cambió antes de confirmar:\n\n" + insuficientes.map(i => `· ${i.nombre}: pediste ${i.unidadesReales}, disponibles ${i.disponible}`).join("\n") + "\n\nAjustamos el carrito. Revisalo antes de confirmar nuevamente.");
+        return;
       }
       const itemsBackup = itemsCarrito.map(i => {
         const esCaja = i.modo === "caja";
@@ -3107,34 +3217,32 @@ function Tienda() {
       if (!r.ok) throw new Error(await r.text());
       const creado = await r.json().catch(() => null);
       const backupId = Array.isArray(creado) && creado[0] ? creado[0].id : null;
-      // La mercadería SALE del stock apenas el cliente confirma, igual que
-      // cuando el vendedor envía un pedido desde el panel. Por atrás son dos
-      // pasos con la misma referencia (reservar + salida): el físico baja una
-      // sola vez y no queda nada "reservado". Vuelve al stock solo si el admin
-      // rechaza o borra el pedido, o por una devolución aprobada.
+      if (!backupId) {
+        try {
+          await fetch(`${SB_URL}/rest/v1/backup_pedidos?empresa_id=eq.${empresa.id}&track_code=eq.${encodeURIComponent(codigo)}`, {
+            method: "DELETE",
+            headers: SB_HDR
+          });
+        } catch (_) {}
+        throw new Error("PEDIDO_SIN_REFERENCIA");
+      }
+      // Descuento atómico: Supabase vuelve a validar y descuenta en la misma
+      // transacción. Así dos vendedores/clientes no pueden llevar la última unidad.
       if (backupId) {
         try {
-          let _res = itemsBackup.filter(i => i.id !== "ENVIO" && Number(i.c) > 0).map(i => ({
+          const _res = itemsBackup.filter(i => i.id !== "ENVIO" && Number(i.c) > 0 && fresco[String(i.id)] !== undefined).map(i => ({
             codigo: String(i.id),
             cant: Number(i.c)
           }));
-          // Sin el control de stock activado se descuenta igual (como el
-          // vendedor), pero SOLO los productos que ya tienen stock cargado:
-          // a la empresa que no lleva inventario no le inventamos filas.
-          if (_res.length && !empresa.control_stock) {
-            const _codes = _res.map(i => encodeURIComponent('"' + String(i.codigo).replace(/"/g, "") + '"')).join(",");
-            const _rows = await sbGet("stock", `select=codigo&empresa_id=eq.${empresa.id}&codigo=in.(${_codes})`).catch(() => null);
-            const _have = new Set((_rows || []).map(s => String(s.codigo)));
-            _res = _res.filter(i => _have.has(i.codigo));
-          }
           if (_res.length) {
             const _payload = {
               p_empresa: empresa.id,
               p_ref: String(backupId),
               p_items: _res,
-              p_usuario: "tienda"
+              p_usuario: "tienda",
+              p_motivo: "Pedido tienda online"
             };
-            const _rpc = fn => fetch(`${SB_URL}/rest/v1/rpc/${fn}`, {
+            const _rr = await fetch(`${SB_URL}/rest/v1/rpc/stk_confirmar_salida`, {
               method: "POST",
               headers: {
                 ...SB_HDR,
@@ -3142,43 +3250,26 @@ function Tienda() {
               },
               body: JSON.stringify(_payload)
             });
-            const _rr = await _rpc("stk_reservar");
-            if (_rr.ok) {
-              let _repetido = false;
-              try {
-                const _j = await _rr.clone().json();
-                _repetido = !!(_j && _j.repetido);
-              } catch (e) {}
-              if (!_repetido) {
-                await _rpc("stk_salida");
-              }
-            } else {
-              // PLAN B: la función no está en la base — descuento directo,
-              // fila por fila, sobre la tabla de stock.
-              console.warn("[Stock] motor no disponible — descuento directo");
-              for (const it of _res) {
-                try {
-                  const cur = await sbGet("stock", `select=cantidad&empresa_id=eq.${empresa.id}&codigo=eq.${encodeURIComponent(it.codigo)}`);
-                  if (!cur || !cur.length) continue;
-                  await fetch(`${SB_URL}/rest/v1/stock?empresa_id=eq.${empresa.id}&codigo=eq.${encodeURIComponent(it.codigo)}`, {
-                    method: "PATCH",
-                    headers: {
-                      ...SB_HDR,
-                      "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({
-                      cantidad: Number(cur[0].cantidad || 0) - it.cant,
-                      updated_at: new Date().toISOString()
-                    })
-                  });
-                } catch (e2) {
-                  console.warn("[Stock] descuento directo:", e2.message);
-                }
-              }
-            }
+            if (!_rr.ok) throw new Error("STOCK_RPC|" + (await _rr.text()));
+            setStockDisp(actual => {
+              const cp = { ...(actual || fresco) };
+              _res.forEach(i => {
+                if (cp[i.codigo] !== undefined) cp[i.codigo] = Math.max(0, Number(cp[i.codigo] || 0) - i.cant);
+              });
+              return cp;
+            });
           }
         } catch (e) {
-          console.warn("[Stock] no se pudo descontar:", e.message);
+          // El pedido aún no es válido si el stock no pudo descontarse.
+          try {
+            await fetch(`${SB_URL}/rest/v1/backup_pedidos?id=eq.${encodeURIComponent(backupId)}&empresa_id=eq.${empresa.id}`, {
+              method: "DELETE",
+              headers: SB_HDR
+            });
+          } catch (_) {}
+          const actualizado = await fetchStockDisponible(empresa.id).catch(() => null);
+          if (actualizado !== null) setStockDisp(actualizado);
+          throw e;
         }
       }
       // Si paga con Mercado Pago: crear la preferencia y redirigir al checkout de MP
@@ -3266,7 +3357,16 @@ function Tienda() {
       setPaso("exito");
     } catch (e) {
       console.error("Pedido:", e.message);
-      setErrorEnvio("No se pudo enviar el pedido. Revisá tu conexión e intentá de nuevo (tu carrito no se perdió).");
+      const msg = String(e && e.message || "");
+      if (msg.includes("STOCK_RPC") || msg.includes("STOCK_INSUFICIENTE")) {
+        setPaso("carrito");
+        setErrorEnvio("El stock cambió justo antes de confirmar. Actualizamos las cantidades disponibles: revisá el carrito e intentá nuevamente.");
+        alert("Otro vendedor o cliente tomó parte del stock antes que vos. Actualizamos la tienda; revisá el carrito antes de confirmar nuevamente.");
+      } else if (msg.includes("STOCK_NO_VERIFICADO")) {
+        setErrorEnvio("No pudimos verificar el stock en tiempo real. El pedido no fue enviado. Revisá tu conexión e intentá nuevamente.");
+      } else {
+        setErrorEnvio("No se pudo enviar el pedido. Revisá tu conexión e intentá de nuevo (tu carrito no se perdió).");
+      }
     } finally {
       setEnviando(false);
     }
@@ -4145,7 +4245,14 @@ function Tienda() {
         lineHeight: 1.55,
         whiteSpace: "pre-wrap"
       }
-    }, p.detalles) : null, p._esFamilia ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    }, p.detalles) : null, p._esFamilia ? /*#__PURE__*/React.createElement("div", null, p._minFamilia > 1 ? /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-bold mb-3 rounded-xl px-3 py-2",
+      style: {
+        color: TEMA.gold,
+        background: TEMA.bgSoft,
+        border: `1px solid ${TEMA.gold}`
+      }
+    }, "Mínimo combinado: ", p._minFamilia, " unidades entre todas las variedades") : null, /*#__PURE__*/React.createElement("div", {
       className: "text-[11px] mb-2 font-medium",
       style: {
         color: TEMA.textoSuave
@@ -5493,17 +5600,17 @@ function Tienda() {
       color: TEMA.textoSuave
     }
   }, "Vaciar"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => cumpleMinimo && setPaso("revisar"),
-    disabled: !cumpleMinimo,
+    onClick: () => cumpleMinimo && cumpleMinFamilias && setPaso("revisar"),
+    disabled: !cumpleMinimo || !cumpleMinFamilias,
     className: "flex-1 py-3 rounded-xl font-bold transition active:scale-95 flex items-center justify-center gap-1",
     style: {
-      background: cumpleMinimo ? TEMA.gold : TEMA.bgSoft,
-      color: cumpleMinimo ? TEMA.bg : TEMA.textoSuave,
-      cursor: cumpleMinimo ? "pointer" : "not-allowed"
+      background: cumpleMinimo && cumpleMinFamilias ? TEMA.gold : TEMA.bgSoft,
+      color: cumpleMinimo && cumpleMinFamilias ? TEMA.bg : TEMA.textoSuave,
+      cursor: cumpleMinimo && cumpleMinFamilias ? "pointer" : "not-allowed"
     }
-  }, cumpleMinimo ? /*#__PURE__*/React.createElement(React.Fragment, null, "Ver pedido final ", /*#__PURE__*/React.createElement(ChevronRight, {
-    size: 18
-  })) : `Faltan ${fmt(faltaMinimo)}`)))), paso === "revisar" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, cumpleMinimo && cumpleMinFamilias ? /*#__PURE__*/React.createElement(React.Fragment, null, "Ver pedido final ", /*#__PURE__*/React.createElement(ChevronRight, {
+      size: 18
+    })) : !cumpleMinFamilias ? `Faltan ${primerFaltanteFamilia.faltan} de ${primerFaltanteFamilia.familia}` : `Faltan ${fmt(faltaMinimo)}`)))), paso === "revisar" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto px-4 py-3 space-y-4 step-in"
   }, hayZonas && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "text-xs font-bold mb-2",
