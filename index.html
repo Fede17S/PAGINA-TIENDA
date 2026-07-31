@@ -1018,6 +1018,21 @@ function precioEfectivo(p, listaKey) {
   if (lk.includes("cliente")) return p.precioClientes || p.precioBase || 0;
   return p.precioClientes || p.precioBase || 0;
 }
+function temporadaActual(fecha = new Date()) {
+  const m = fecha.getMonth() + 1;
+  if (m === 12 || m <= 2) return "verano";
+  if (m <= 5) return "otono";
+  if (m <= 8) return "invierno";
+  return "primavera";
+}
+function temporadaInfo(t) {
+  return {
+    verano: { nombre: "Verano", emoji: "☀️", color: "#e89218" },
+    otono: { nombre: "Otoño", emoji: "🍂", color: "#b55b23" },
+    invierno: { nombre: "Invierno", emoji: "❄️", color: "#2a70b2" },
+    primavera: { nombre: "Primavera", emoji: "🌸", color: "#c74382" }
+  }[t] || { nombre: "Temporada", emoji: "🌦️", color: "#547080" };
+}
 function mapProducto(p) {
   const promo = p.precio_promo && p.precio_promo > 0 ? {
     precio: p.precio_promo,
@@ -1068,6 +1083,8 @@ function mapProducto(p) {
     promo,
     oferta,
     familia: p.familia || null,
+    temporada: p.temporada || "",
+    creadoEn: p.creado_en || null,
     esPortada: p.es_portada || false,
     precioClientes: p.precio_clientes || 0,
     precioPatagonia: p.precio_patagonia || 0,
@@ -1164,14 +1181,19 @@ async function fetchProductos(empId) {
   const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo,familia,es_portada";
   const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta,oferta_tipo,oferta_pct,oferta_precios,activo,fotos";
   const COLS_CAJA = COLS_NEW + ",precio_caja,detalles";
+  const COLS_TEMP = COLS_CAJA + ",temporada,creado_en";
   let rows;
   try {
-    rows = await sbGet("productos", `select=${COLS_CAJA}&empresa_id=eq.${empId}&order=nombre.asc`);
+    rows = await sbGet("productos", `select=${COLS_TEMP}&empresa_id=eq.${empId}&order=nombre.asc`);
   } catch (e0) {
     try {
-      rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`);
-    } catch (e) {
-      rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`);
+      rows = await sbGet("productos", `select=${COLS_CAJA}&empresa_id=eq.${empId}&order=nombre.asc`);
+    } catch (e1) {
+      try {
+        rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`);
+      } catch (e) {
+        rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`);
+      }
     }
   }
   if (!rows) {
@@ -2340,8 +2362,9 @@ function Tienda() {
           _esFamilia: true,
            _famNombre: cel._famKey,
            _variantes: items,
-           _nVariantes: items.length,
-           _minFamilia: port && port.minCompra > 1 ? port.minCompra : 1,
+          _nVariantes: items.length,
+          _minFamilia: port && port.minCompra > 1 ? port.minCompra : 1,
+          temporada: items.some(x => x.temporada === temporadaActual()) ? temporadaActual() : "",
            precio: minP,
           precioAntes: null,
           enOferta: hayOferta,
@@ -2365,6 +2388,16 @@ function Tienda() {
       });
       cats.sort(cmpCat);
       const secs = [];
+      const _temp = temporadaActual();
+      const _tempProds = visibles.filter(p => p.temporada === _temp);
+      if (_tempProds.length) {
+        const ti = temporadaInfo(_temp);
+        secs.push({
+          key: "temporada",
+          label: `${ti.emoji} Especial ${ti.nombre}`,
+          items: _tempProds
+        });
+      }
       /* ⭐ Destacados: los productos que la distribuidora fijó a mano en el
          editor. Van arriba de todo, antes que "los más pedidos". Se guardan
          como una lista de códigos/IDs dentro de la config de la tienda: la
@@ -2526,7 +2559,14 @@ function Tienda() {
         color: "#fff",
         boxShadow: "0 2px 8px #00000055"
       }
-    }, "🏷️ PROMO"), enCarrito > 0 && /*#__PURE__*/React.createElement("span", {
+    }, "🏷️ PROMO"), p.temporada === temporadaActual() && /*#__PURE__*/React.createElement("span", {
+      className: "absolute bottom-2 left-2 text-[10px] font-extrabold px-2 py-1 rounded-full",
+      style: {
+        background: temporadaInfo(p.temporada).color,
+        color: "#fff",
+        boxShadow: "0 2px 8px #00000044"
+      }
+    }, temporadaInfo(p.temporada).emoji, " ", temporadaInfo(p.temporada).nombre), enCarrito > 0 && /*#__PURE__*/React.createElement("span", {
       className: "absolute top-2 right-2 text-[11px] font-extrabold w-6 h-6 rounded-full flex items-center justify-center",
       style: {
         background: TEMA.gold,
@@ -2686,7 +2726,13 @@ function Tienda() {
       onClick: () => setDetalle(p)
     }, /*#__PURE__*/React.createElement("div", {
       className: "text-sm font-medium leading-snug line-clamp-1"
-    }, p.nombre), /*#__PURE__*/React.createElement("div", {
+    }, p.nombre), p.temporada === temporadaActual() && /*#__PURE__*/React.createElement("span", {
+      className: "inline-flex text-[9px] font-extrabold px-1.5 py-0.5 rounded-full mt-0.5",
+      style: {
+        background: temporadaInfo(p.temporada).color,
+        color: "#fff"
+      }
+    }, temporadaInfo(p.temporada).emoji, " ", temporadaInfo(p.temporada).nombre), /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-2"
     }, p.enOferta && p.precioAntes ? /*#__PURE__*/React.createElement("span", {
       className: "flex items-baseline gap-1.5"
@@ -4949,7 +4995,7 @@ function Tienda() {
       if (restantes <= 0) break;
       // Las vitrinas (ofertas y destacados) van en carrusel y muestran
       // todas sin consumir el límite de "ver más productos".
-      const esVitrina = sec.key === "ofertas" || sec.key === "destacados";
+      const esVitrina = sec.key === "ofertas" || sec.key === "destacados" || sec.key === "temporada";
       const itemsMostrar = esVitrina ? sec.items : sec.items.slice(0, restantes);
       if (!itemsMostrar.length) continue;
       if (!esVitrina) restantes -= itemsMostrar.length;
@@ -4959,7 +5005,7 @@ function Tienda() {
       }, sec.label && /*#__PURE__*/React.createElement("h2", {
         className: "text-base font-extrabold mb-2 px-0.5",
         style: {
-          color: sec.key === "ofertas" ? TEMA.oferta : TEMA.gold,
+          color: sec.key === "ofertas" ? TEMA.oferta : sec.key === "temporada" ? temporadaInfo(temporadaActual()).color : TEMA.gold,
           fontFamily: "var(--f-tit)"
         }
       }, sec.label), esVitrina && vista !== "lista" ? /*#__PURE__*/React.createElement("div", {
