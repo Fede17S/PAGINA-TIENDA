@@ -2456,10 +2456,13 @@ function Tienda() {
     }];
   }, [visibles, productos, cat, soloOfertas, busqueda, cmpCat, masVendidos, cfg.destacados, cfg.tituloDestacados]);
 
-  // Reiniciar la cantidad mostrada cuando cambian los filtros
+  // Reiniciar la cantidad mostrada solo cuando cambia un filtro elegido por el
+  // usuario. `productos` cambia de referencia cada vez que se refresca el stock
+  // (cada 10 s), aunque el filtro siga igual; incluirlo acá contraía la grilla
+  // otra vez a 12 después de tocar "Ver más productos".
   useEffect(() => {
     setLimite(12);
-  }, [cat, busqueda, soloOfertas, orden, productos]);
+  }, [cat, busqueda, soloOfertas, orden]);
 
   // Carga manual mediante el botón "Ver más productos" (scroll infinito desactivado
   // para no cargar todas las imágenes de una).
