@@ -1033,9 +1033,28 @@ function temporadaInfo(t) {
     primavera: { nombre: "Primavera", emoji: "🌸", color: "#c74382" }
   }[t] || { nombre: "Temporada", emoji: "🌦️", color: "#547080" };
 }
+function promoPrecioUnitarioSeguroTienda(p, precioCrudo, precioNormal) {
+  const raw = Number(precioCrudo || 0);
+  const normal = Number(precioNormal || 0);
+  let ub = Number(p && p.unidades_bulto || 0);
+  if (!(ub > 1)) {
+    const nom = String(p && p.nombre || "");
+    const m = nom.match(/\b(?:pack|caja|bulto|display|bl[ií]ster|paquete)\s*(?:de\s*)?x?\s*(\d{1,3})\b/i);
+    ub = m ? Number(m[1]) : 0;
+  }
+  // Sólo corrige el patrón inequívoco: total del pack mayor al unitario,
+  // cuya división por unidades sí es un precio promocional menor.
+  if (raw > normal && normal > 0 && ub > 1) {
+    const unit = Math.round(raw / ub * 100) / 100;
+    if (unit > 0 && unit < normal) return unit;
+  }
+  return raw;
+}
 function mapProducto(p) {
+  const normalPromo = p.precio_clientes || p.precio_base || 0;
+  const precioPromoSeguro = promoPrecioUnitarioSeguroTienda(p, p.precio_promo, normalPromo);
   const promo = p.precio_promo && p.precio_promo > 0 ? {
-    precio: p.precio_promo,
+    precio: precioPromoSeguro,
     cant: p.cant_promo || 0
   } : null;
   // Oferta: vigente si está activa, tiene datos (% o precio) y no venció.
@@ -1169,7 +1188,7 @@ async function fetchCatVer(empId) {
   }
 }
 async function fetchProductos(empId) {
-  const ckey = "tienda_prod_" + empId;
+  const ckey = "tienda_prod_v2_" + empId;
   const ver = await fetchCatVer(empId);
   // Si el catálogo no cambió, usar la copia local (NO baja fotos => ahorra egress)
   if (ver) {
@@ -1180,7 +1199,7 @@ async function fetchProductos(empId) {
   }
   const COLS = "id,codigo,nombre,categoria,precio_base,precio_clientes,precio_patagonia,precios,foto,precio_promo,cant_promo,familia,es_portada";
   const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta,oferta_tipo,oferta_pct,oferta_precios,activo,fotos";
-  const COLS_CAJA = COLS_NEW + ",precio_caja,detalles";
+  const COLS_CAJA = COLS_NEW + ",precio_caja,unidad_bulto,vende_por,peso_display,detalles";
   const COLS_TEMP = COLS_CAJA + ",temporada,creado_en";
   let rows;
   try {
@@ -2048,10 +2067,9 @@ function Tienda() {
         }
         setEmpresa(emp);
         const [prods, savedCfg, lists, fams, stk] = await Promise.all([fetchProductos(emp.id), fetchConfig(emp.id).catch(() => null), fetchListas(emp.id).catch(() => []), fetchFamilias(emp.id).catch(() => ({})),
-        // El stock se pide junto con todo lo demás (es liviano: no trae fotos),
-        // así la tienda ya arranca sin los productos agotados en vez de mostrarlos
-        // medio segundo y después esconderlos.
-        fetchStockDisponible(emp.id).catch(() => null)]);
+        // El inventario sólo participa si la empresa activó expresamente el
+        // control. Con el interruptor apagado la tienda trabaja en preventa.
+        emp.control_stock === true ? fetchStockDisponible(emp.id).catch(() => null) : Promise.resolve(null)]);
         setProductosRaw(prods);
         setStockDisp(stk);
         if (stk) {
@@ -2102,7 +2120,10 @@ function Tienda() {
   // el producto ya no está en el catálogo. Lo sacamos del carrito y le avisamos,
   // así no llega a la pantalla de pagar y le desaparece un renglón sin explicación.
   useEffect(() => {
-    if (!empresa) return;
+    if (!empresa || empresa.control_stock !== true) {
+      setStockDisp(null);
+      return;
+    }
     let activo = true;
     const refrescarStock = async () => {
       const fresco = await fetchStockDisponible(empresa.id).catch(() => null);
@@ -3170,48 +3191,69 @@ function Tienda() {
     setErrorEnvio("");
     setEnviando(true);
     try {
-      // Relectura obligatoria: no se confirma usando el stock que quedó en pantalla.
-      const fresco = await fetchStockDisponible(empresa.id).catch(() => null);
-      if (fresco === null) {
-        throw new Error("STOCK_NO_VERIFICADO");
-      }
-      setStockDisp(fresco);
-      const insuficientes = itemsCarrito.map(i => {
-        const disponible = stockDe(i, fresco);
-        if (disponible === null || Number(i.unidadesReales || 0) <= disponible) return null;
-        const mult = i.modo === "caja" ? Number(i.unidadesBulto || 1) : 1;
-        return {
-          ...i,
-          disponible,
-          maxCarrito: Math.max(0, Math.floor(disponible / mult))
-        };
-      }).filter(Boolean);
-      if (insuficientes.length) {
-        setCarrito(c => {
-          const cp = { ...c };
-          insuficientes.forEach(i => {
-            if (i.maxCarrito > 0) cp[String(i.id)] = i.maxCarrito;else delete cp[String(i.id)];
+      const controlaStock = empresa.control_stock === true;
+      let fresco = null;
+      if (controlaStock) {
+        // Relectura obligatoria sólo con control activo: no se confirma usando
+        // el stock que quedó en pantalla.
+        fresco = await fetchStockDisponible(empresa.id).catch(() => null);
+        if (fresco === null) {
+          throw new Error("STOCK_NO_VERIFICADO");
+        }
+        setStockDisp(fresco);
+        const insuficientes = itemsCarrito.map(i => {
+          const disponible = stockDe(i, fresco);
+          if (disponible === null || Number(i.unidadesReales || 0) <= disponible) return null;
+          const mult = i.modo === "caja" ? Number(i.unidadesBulto || 1) : 1;
+          return {
+            ...i,
+            disponible,
+            maxCarrito: Math.max(0, Math.floor(disponible / mult))
+          };
+        }).filter(Boolean);
+        if (insuficientes.length) {
+          setCarrito(c => {
+            const cp = { ...c };
+            insuficientes.forEach(i => {
+              if (i.maxCarrito > 0) cp[String(i.id)] = i.maxCarrito;else delete cp[String(i.id)];
+            });
+            return cp;
           });
-          return cp;
-        });
-        setPaso("carrito");
-        alert("El stock cambió antes de confirmar:\n\n" + insuficientes.map(i => `· ${i.nombre}: pediste ${i.unidadesReales}, disponibles ${i.disponible}`).join("\n") + "\n\nAjustamos el carrito. Revisalo antes de confirmar nuevamente.");
-        return;
+          setPaso("carrito");
+          alert("El stock cambió antes de confirmar:\n\n" + insuficientes.map(i => `· ${i.nombre}: pediste ${i.unidadesReales}, disponibles ${i.disponible}`).join("\n") + "\n\nAjustamos el carrito. Revisalo antes de confirmar nuevamente.");
+          return;
+        }
       }
       const itemsBackup = itemsCarrito.map(i => {
         const esCaja = i.modo === "caja";
         const unidades = i.unidadesReales;
         const nombre = esCaja ? `${i.nombre} (caja x${i.unidadesBulto})` : i.nombre;
-        const etiqueta = i.aplicaPromo ? "PROMO" : i.enOferta ? "OFERTA" : null;
-        return {
+        const precioFinal = Number(i.precioUnitInd || 0);
+        // Congelar también el precio anterior y el origen del precio final.
+        // Si se guarda solamente `p`, Backup/Remito cobra bien pero no puede
+        // explicar que ese valor proviene de una OFERTA o una PROMO.
+        const normalOferta = i.enOferta && Number(i.precioAntes) > precioFinal ? Number(i.precioAntes) : 0;
+        const normalPromo = !normalOferta && i.aplicaPromo && Number(i.precio) > precioFinal ? Number(i.precio) : 0;
+        const etiqueta = normalOferta ? "OFERTA" : normalPromo ? "PROMO" : null;
+        const item = {
           id: i.codigo || String(i.id),
           n: nombre,
           c: unidades,
-          p: i.precioUnitInd,
-          sub: unidades * i.precioUnitInd,
+          p: precioFinal,
+          sub: unidades * precioFinal,
           dsc: null,
           et: etiqueta
         };
+        if (normalOferta) {
+          item.ofNormal = normalOferta;
+          item.ofPrecio = precioFinal;
+          item.ofAplicada = true;
+        } else if (normalPromo) {
+          item.promoNormal = normalPromo;
+          item.promoPrecio = precioFinal;
+          item.promoAplicada = true;
+        }
+        return item;
       });
       if (envio > 0) itemsBackup.push({
         id: "ENVIO",
@@ -3277,7 +3319,7 @@ function Tienda() {
       }
       // Descuento atómico: Supabase vuelve a validar y descuenta en la misma
       // transacción. Así dos vendedores/clientes no pueden llevar la última unidad.
-      if (backupId) {
+      if (controlaStock && backupId) {
         try {
           const _res = itemsBackup.filter(i => i.id !== "ENVIO" && Number(i.c) > 0 && fresco[String(i.id)] !== undefined).map(i => ({
             codigo: String(i.id),
@@ -3316,8 +3358,10 @@ function Tienda() {
               headers: SB_HDR
             });
           } catch (_) {}
-          const actualizado = await fetchStockDisponible(empresa.id).catch(() => null);
-          if (actualizado !== null) setStockDisp(actualizado);
+          if (controlaStock) {
+            const actualizado = await fetchStockDisponible(empresa.id).catch(() => null);
+            if (actualizado !== null) setStockDisp(actualizado);
+          }
           throw e;
         }
       }
@@ -5223,7 +5267,7 @@ function Tienda() {
       color: TEMA.textoSuave,
       opacity: .5
     }
-  }, "v2026.07.29-cond"), /*#__PURE__*/React.createElement("div", {
+  }, "v2026.08.05-preventa1"), /*#__PURE__*/React.createElement("div", {
     className: "h-24 md:hidden"
   })), carritoAbierto && paso === "exito" && /*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 z-50 overflow-hidden flex flex-col items-center justify-center px-6",
