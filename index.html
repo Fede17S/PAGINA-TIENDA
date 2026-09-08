@@ -522,7 +522,9 @@ const CFG_DEFAULT = {
   ordenCategorias: [],
   // orden manual de categorías (vacío = alfabético)
   listaPrecio: "",
-  // lista de precios a mostrar (vacío = la primera/clientes)
+  // lista histórica; se conserva por compatibilidad, ya no decide la lista pública
+  listaPublica: "",
+  // vacío = Consumidor final/Público si existe; si no, PRECIO DE VENTA (cli)
   horarios: "",
   // horario de atención (texto libre, ej: "Lun a Vie 8-18h")
   direccionTienda: "",
@@ -1011,12 +1013,112 @@ async function validarAdmin(empId, uid, pass, empCodigo) {
     };
   }
 }
+function claveListaTienda(key) {
+  const k = String(key || "cli").trim();
+  if (["clientes", "precio normal", "cli"].includes(k.toLowerCase())) return "cli";
+  if (["patagonia", "pat"].includes(k.toLowerCase())) return "pat";
+  return k;
+}
+function listaPublicaTienda(cfg, listas) {
+  if (cfg.listaPublica && listas.some(l => l.key === cfg.listaPublica)) return cfg.listaPublica;
+  const publica = listas.find(l => /^(consumidor final|p[uú]blico|venta al p[uú]blico|pvp)$/i.test(l.nombre.trim()));
+  return publica ? publica.key : "cli";
+}
 function precioEfectivo(p, listaKey) {
-  if (p.preciosJson && p.preciosJson[listaKey] > 0) return p.preciosJson[listaKey];
-  const lk = (listaKey || "").toLowerCase();
-  if (lk.includes("patagon")) return p.precioPatagonia || p.precioClientes || p.precioBase || 0;
-  if (lk.includes("cliente")) return p.precioClientes || p.precioBase || 0;
-  return p.precioClientes || p.precioBase || 0;
+  const key = claveListaTienda(listaKey);
+  const valor = Number(p.preciosJson && p.preciosJson[key]);
+  if (Number.isFinite(valor) && valor > 0) return valor;
+  // Nunca usar precio_base: es costo, no precio de venta al público.
+  if (key === "pat" && Number(p.precioPatagonia) > 0) return Number(p.precioPatagonia);
+  return Math.max(0, Number(p.precioClientes) || 0);
+}
+function productoParaListaTienda(p, listaKey) {
+  const key = claveListaTienda(listaKey);
+  const base = precioEfectivo(p, key);
+  const datos = p.ofertaDatos;
+  let oferta = null;
+  if (datos && datos.activa && (!datos.hasta || new Date(datos.hasta + "T23:59:59") >= new Date())) {
+    const fijo = Number(datos.precios && datos.precios[key]) || (key === "cli" ? Number(datos.precio) : 0);
+    const precio = datos.tipo === "pct" && datos.pct > 0 && datos.pct < 100
+      ? Math.round(base * (1 - datos.pct / 100) * 100) / 100 : fijo;
+    if (precio > 0 && precio < base) oferta = { precio, hasta: datos.hasta };
+  }
+  // La promo y el precio de caja son condiciones comunes del producto.
+  const promo = p.promo && p.promo.precio > 0 && p.promo.precio < base ? p.promo : null;
+  return { ...p, oferta, promo, precio: oferta ? oferta.precio : base,
+    precioAntes: oferta ? base : null, enOferta: !!oferta };
+}
+function claveSesionClienteTienda(empresaId) { return "tienda_cliente_v1_" + empresaId; }
+function leerIdClienteTienda(empresaId) {
+  try {
+    const sesion = JSON.parse(localStorage.getItem(claveSesionClienteTienda(empresaId)) || "null");
+    return sesion && sesion.empresa_id === empresaId && typeof sesion.uid === "string" ? sesion.uid : "";
+  } catch (_) { return ""; }
+}
+function recordarClienteTienda(empresaId, cliente) {
+  try {
+    const key = claveSesionClienteTienda(empresaId);
+    if (cliente) localStorage.setItem(key, JSON.stringify({empresa_id: empresaId, uid: cliente.uid}));
+    else localStorage.removeItem(key);
+    return true;
+  } catch (_) { return false; }
+}
+async function identificarClienteTienda(empresaId, uid) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/rpc/tienda_cliente_por_id`, {
+      method: "POST", headers: { apikey: SB_KEY, Authorization: "Bearer " + SB_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({p_empresa: empresaId, p_uid: String(uid || "").trim()}), signal: controller.signal, cache: "no-store"
+    });
+    if (!r.ok) throw new Error("No se pudo verificar tu ID. Revisá tu conexión e intentá nuevamente.");
+    const c = await r.json();
+    return c && c.empresa_id === empresaId && c.uid && c.lista_key && c.lista_nombre ? c : null;
+  } finally { clearTimeout(timer); }
+}
+function rutaTienda(url) {
+  const u = new URL(url);
+  const admin = /\/admin\/?$/i.test(u.pathname);
+  const codigo = u.searchParams.get("emp") || u.searchParams.get("e") || "";
+  if (admin) u.pathname = u.pathname.replace(/admin\/?$/i, "").replace(/(\.html)\/$/i, "$1");
+  u.hash = "";
+  return { admin, codigo, publica: u.href };
+}
+function AccesoClienteTienda({tema, cliente, uid, setUid, error, cargando, entrar, salir, cerrar}) {
+  const panel = useRef(null);
+  useEffect(() => {
+    const anterior = document.activeElement;
+    (panel.current?.querySelector("input:not(:disabled)") || panel.current?.querySelector("button"))?.focus();
+    return () => anterior?.focus();
+  }, []);
+  const teclado = e => {
+    if (e.key === "Escape") { e.stopPropagation(); cerrar(); }
+    if (e.key !== "Tab") return;
+    const campos = [...panel.current.querySelectorAll("input:not(:disabled), button:not(:disabled)")];
+    const primero = campos[0], ultimo = campos[campos.length - 1];
+    if (e.shiftKey && document.activeElement === primero) { e.preventDefault(); ultimo.focus(); }
+    else if (!e.shiftKey && document.activeElement === ultimo) { e.preventDefault(); primero.focus(); }
+  };
+  const boton = { borderRadius: 12, padding: "12px 16px", fontWeight: 700, cursor: "pointer" };
+  return React.createElement("div", {className: "fixed inset-0 z-50 flex items-center justify-center p-4", style: {background: "#0009"}},
+    React.createElement("section", {ref: panel, role: "dialog", "aria-modal": true, "aria-labelledby": "cliente-titulo", onKeyDown: teclado,
+      style: {width: "100%", maxWidth: 410, padding: 24, borderRadius: 24, background: tema.bgCard, color: tema.texto,
+        border: "1px solid " + tema.borde, boxShadow: "0 24px 80px #0006", maxHeight: "90dvh", overflowY: "auto"}},
+      React.createElement("div", {style: {display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18}},
+        React.createElement("h2", {id: "cliente-titulo", style: {fontSize: 22, fontWeight: 800}}, cliente ? "Tu cuenta" : "Precios para clientes"),
+        React.createElement("button", {type: "button", onClick: cerrar, "aria-label": "Cerrar acceso de clientes", style: {...boton, background: tema.bgSoft}}, "✕")),
+      React.createElement("p", {style: {fontSize: 14, lineHeight: 1.6, color: tema.textoSuave, marginBottom: 20}},
+        cliente ? "Ingresaste con el ID " + cliente.uid + ". Estás viendo tu lista " + cliente.lista_nombre + "." : "Ingresá el ID que te dio la distribuidora para ver tus precios. Lo recordaremos en este dispositivo."),
+      !cliente && React.createElement("form", {onSubmit: e => {e.preventDefault(); if (!cargando && uid.trim()) entrar();}},
+        React.createElement("label", {htmlFor: "cliente-id", style: {display: "block", fontSize: 13, fontWeight: 700, marginBottom: 8}}, "ID de cliente"),
+        React.createElement("input", {id: "cliente-id", value: uid, onChange: e => setUid(e.target.value), maxLength: 100,
+          autoComplete: "username", autoCapitalize: "none", spellCheck: false, placeholder: "Ej.: CL151", disabled: cargando,
+          style: {width: "100%", boxSizing: "border-box", padding: 14, fontSize: 16, borderRadius: 12, border: "1px solid " + tema.borde, background: tema.bg, color: tema.texto}}),
+        React.createElement("button", {type: "submit", disabled: cargando || !uid.trim(), style: {...boton, marginTop: 14, width: "100%", background: tema.gold, color: tema.bg, opacity: cargando || !uid.trim() ? .6 : 1}}, cargando ? "Verificando tu ID…" : "Ingresar")),
+      error && React.createElement("p", {role: "alert", style: {fontSize: 13, lineHeight: 1.5, color: tema.oferta, marginTop: 12}}, error),
+      React.createElement("button", {type: "button", onClick: salir, style: {...boton, marginTop: 14, width: "100%", background: tema.bgSoft, color: tema.texto}}, cliente ? "Cerrar sesión" : "Continuar con precios al público"),
+      React.createElement("p", {style: {fontSize: 11, color: tema.textoSuave, marginTop: 16, lineHeight: 1.5}}, "En un dispositivo compartido, cerrá la sesión al terminar. Este acceso es solo para precios y pedidos, no para administrar la tienda.")
+    ));
 }
 function temporadaActual(fecha = new Date()) {
   const m = fecha.getMonth() + 1;
@@ -1101,6 +1203,8 @@ function mapProducto(p) {
     fotos: Array.isArray(p.fotos) ? p.fotos : [],
     promo,
     oferta,
+    ofertaDatos: { activa: !!p.oferta_activa, tipo: p.oferta_tipo || "fijo", pct: Number(p.oferta_pct || 0),
+      precio: Number(p.oferta_precio || 0), precios: p.oferta_precios || {}, hasta: p.oferta_hasta || null },
     familia: p.familia || null,
     temporada: p.temporada || "",
     creadoEn: p.creado_en || null,
@@ -1188,7 +1292,7 @@ async function fetchCatVer(empId) {
   }
 }
 async function fetchProductos(empId) {
-  const ckey = "tienda_prod_v2_" + empId;
+  const ckey = "tienda_prod_v3_" + empId; // incluye ofertas por lista, invalida el formato anterior
   const ver = await fetchCatVer(empId);
   // Si el catálogo no cambió, usar la copia local (NO baja fotos => ahorra egress)
   if (ver) {
@@ -1358,6 +1462,7 @@ function mergeCfg(saved) {
     banners: Array.isArray(saved.banners) ? saved.banners : CFG_DEFAULT.banners,
     ordenCategorias: Array.isArray(saved.ordenCategorias) ? saved.ordenCategorias : [],
     listaPrecio: typeof saved.listaPrecio === "string" ? saved.listaPrecio : "",
+    listaPublica: typeof saved.listaPublica === "string" ? saved.listaPublica : "",
     // Las listas nuevas: si vienen rotas o de una config vieja, quedan vacías (no rompen nada).
     zonasEnvio: Array.isArray(saved.zonasEnvio) ? saved.zonasEnvio : [],
     formasPago: Array.isArray(saved.formasPago) ? saved.formasPago : [],
@@ -1917,6 +2022,13 @@ function Tienda() {
   const [stockDisp, setStockDisp] = useState(null);
   const [compradosJuntos, setCompradosJuntos] = useState({}); // { idProd: [idsSugeridos] }
   const [listas, setListas] = useState([]);
+  const [clienteSesion, setClienteSesion] = useState(null);
+  const [clienteOpen, setClienteOpen] = useState(false);
+  const [clienteId, setClienteId] = useState("");
+  const [clienteError, setClienteError] = useState("");
+  const [clienteCargando, setClienteCargando] = useState(false);
+  const clienteSolicitud = useRef(0);
+  const clienteVerificando = useRef(false);
   const [cargando, setCargando] = useState(true);
   const [aviso, setAviso] = useState("");
   const [cfgBase, setCfgBase] = useState(CFG_DEFAULT);
@@ -1958,11 +2070,9 @@ function Tienda() {
   }, [cfg && cfg.tipografia]);
 
   // Lista de precios activa y precios derivados según esa lista
-  const listaActiva = useMemo(() => {
-    const keys = listas.map(l => l.key);
-    if (cfg.listaPrecio && keys.includes(cfg.listaPrecio)) return cfg.listaPrecio;
-    return keys[0] || "clientes";
-  }, [cfg.listaPrecio, listas]);
+  const listaPublica = useMemo(() => listaPublicaTienda(cfg, listas), [cfg.listaPublica, listas]);
+  const listaActiva = clienteSesion ? clienteSesion.lista_key : listaPublica;
+  const nombreListaActiva = clienteSesion ? clienteSesion.lista_nombre : (listas.find(l => l.key === listaPublica)?.nombre || "Clientes");
   const productos = useMemo(
   // El filtro por stock va acá arriba de todo a propósito: así el producto
   // agotado desaparece de una sola vez del catálogo, del buscador, de las
@@ -1977,25 +2087,8 @@ function Tienda() {
     const ocultas = Array.isArray(cfg.categoriasOcultas) ? cfg.categoriasOcultas : [];
     return productosRaw.filter(p => conStock(p, stockDisp) && !ocultas.includes(p.cat)).map(p => {
       const _stk = stockDe(p, stockDisp);
-      const base = precioEfectivo(p, listaActiva);
-      // Si hay oferta vigente y es menor al precio normal, ese es el precio a cobrar
-      if (p.oferta && p.oferta.precio > 0 && p.oferta.precio < base) {
-        return {
-          ...p,
-          _stock: _stk,
-          precio: p.oferta.precio,
-          precioAntes: base,
-          enOferta: true
-        };
-      }
-      return {
-        ...p,
-        _stock: _stk,
-        precio: base,
-        precioAntes: null,
-        enOferta: false
-      };
-    });
+      return { ...productoParaListaTienda(p, listaActiva), _stock: _stk };
+    }).filter(p => p.activo !== false && p.precio > 0);
   }, [productosRaw, listaActiva, stockDisp, cfg.categoriasOcultas]);
   const [cat, setCat] = useState("todos");
   const [busqueda, setBusqueda] = useState("");
@@ -2015,6 +2108,7 @@ function Tienda() {
   const [verCond, setVerCond] = useState(false); // condiciones de venta desplegadas
   const [copiado, setCopiado] = useState(""); // qué dato se acaba de copiar
   const [enviando, setEnviando] = useState(false);
+  const enviandoRef = useRef(false);
   const [metodoPago, setMetodoPago] = useState("destino"); // 'destino' | 'mp'
   const [bump, setBump] = useState(0); // dispara la animación del carrito
   const [splashVisible, setSplashVisible] = useState(true);
@@ -2049,11 +2143,83 @@ function Tienda() {
   const [loginErr, setLoginErr] = useState("");
   const [loginCargando, setLoginCargando] = useState(false);
   const [guardando, setGuardando] = useState(false);
+  const comprobarCliente = async (uid, cerrar = false) => {
+    if (!empresa || enviandoRef.current) return;
+    const solicitud = ++clienteSolicitud.current;
+    clienteVerificando.current = true;
+    setClienteCargando(true);
+    setClienteError("");
+    try {
+      const c = await identificarClienteTienda(empresa.id, uid);
+      if (solicitud !== clienteSolicitud.current) return;
+      setClienteSesion(c);
+      if (!c) {
+        recordarClienteTienda(empresa.id, null);
+        setClienteError("No encontramos un cliente con ese ID y una lista válida en esta tienda. Consultá a la distribuidora.");
+        return;
+      }
+      setClienteId(c.uid);
+      const guardado = recordarClienteTienda(empresa.id, c);
+      if (!guardado) setAviso("Ingresaste, pero el navegador no permite recordar el ID. Habilitá el almacenamiento para conservar el acceso.");
+      if (cerrar) { setClienteOpen(false); setPaso("carrito"); }
+    } catch (_) {
+      if (solicitud !== clienteSolicitud.current) return;
+      setClienteSesion(null);
+      setClienteError("No pudimos verificar tu ID. Podés reintentar o salir y comprar a precio público.");
+    } finally {
+      if (solicitud === clienteSolicitud.current) {
+        clienteVerificando.current = false;
+        setClienteCargando(false);
+      }
+    }
+  };
+  const salirCliente = () => {
+    if (!empresa || enviandoRef.current) return;
+    ++clienteSolicitud.current; // una respuesta lenta no puede volver a iniciar sesión
+    clienteVerificando.current = false;
+    recordarClienteTienda(empresa.id, null);
+    setClienteSesion(null); setClienteId(""); setClienteError(""); setClienteCargando(false);
+    setClienteOpen(false); setPaso("carrito"); setCuponAplicado(null);
+    setCliNom(""); setCliTel(""); setCliDir(""); setCliZona("");
+  };
+  useEffect(() => {
+    if (!empresa) return;
+    const restaurar = () => {
+      const uid = leerIdClienteTienda(empresa.id);
+      if (uid) { setClienteId(uid); comprobarCliente(uid); }
+    };
+    restaurar();
+    const sincronizar = e => {
+      if (e.key !== claveSesionClienteTienda(empresa.id)) return;
+      if (leerIdClienteTienda(empresa.id)) restaurar(); else salirCliente();
+    };
+    window.addEventListener("storage", sincronizar);
+    window.addEventListener("online", restaurar);
+    return () => {
+      ++clienteSolicitud.current;
+      window.removeEventListener("storage", sincronizar);
+      window.removeEventListener("online", restaurar);
+    };
+  }, [empresa]);
+  useEffect(() => {
+    // Carrito conserva cantidades, pero precios se derivan siempre de la lista actual.
+    // Cerrar el detalle evita dejar un producto con su precio anterior en el modal.
+    setDetalle(null); setCuponAplicado(null); setPaso("carrito");
+  }, [listaActiva]);
+  useEffect(() => {
+    if (!empresa || cargando) return;
+    const abrirRuta = () => {
+      if (rutaTienda(window.location.href).admin) abrirAdmin();
+      else { setLoginOpen(false); setEditorOpen(false); setVistaPrevia(false); setAdminOk(false); delete SB_HDR["x-empresa-token"]; }
+    };
+    abrirRuta();
+    window.addEventListener("popstate", abrirRuta);
+    return () => window.removeEventListener("popstate", abrirRuta);
+  }, [empresa, cargando]);
   useEffect(() => {
     (async () => {
       try {
-        const params = new URLSearchParams(window.location.search);
-        const codigo = params.get("emp") || EMP_CODIGO_DEFAULT;
+        const codigo = rutaTienda(window.location.href).codigo || EMP_CODIGO_DEFAULT;
         if (!codigo) {
           setAviso("Falta el código de empresa. Abrí con ?emp=TUCODIGO en la URL.");
           setCargando(false);
@@ -2197,7 +2363,7 @@ function Tienda() {
 
   // Bloquear scroll del fondo cuando hay un panel abierto (evita que se mueva todo en iOS)
   useEffect(() => {
-    const abierto = carritoAbierto || !!detalle || loginOpen || editorOpen;
+    const abierto = carritoAbierto || !!detalle || loginOpen || editorOpen || clienteOpen;
     if (!abierto) return;
     const scrollY = window.scrollY;
     const b = document.body;
@@ -2214,7 +2380,7 @@ function Tienda() {
       b.style.width = "";
       window.scrollTo(0, scrollY);
     };
-  }, [carritoAbierto, detalle, loginOpen, editorOpen]);
+  }, [carritoAbierto, detalle, loginOpen, editorOpen, clienteOpen]);
   const scrollArriba = () => window.scrollTo({
     top: 0,
     behavior: "smooth"
@@ -3163,6 +3329,12 @@ function Tienda() {
   // Inserta el pedido en backup_pedidos (sección Backup Pedidos de tu app)
   const confirmarPedido = async () => {
     if (!empresa) return;
+    if (enviandoRef.current || clienteVerificando.current) return;
+    if (!clienteSesion && leerIdClienteTienda(empresa.id)) {
+      setClienteOpen(true);
+      setClienteError("Verificá tu ID para usar tus precios, o elegí salir y comprar a precio público.");
+      return;
+    }
     if (!cumpleMinFamilias) {
       alert("Falta completar el mínimo combinado por familia:\n\n" + faltantesFamilia.map(f => `· ${f.familia}: llevás ${f.cantidad} de ${f.minimo} (faltan ${f.faltan})`).join("\n"));
       setPaso("carrito");
@@ -3189,8 +3361,19 @@ function Tienda() {
       return;
     }
     setErrorEnvio("");
+    enviandoRef.current = true;
     setEnviando(true);
     try {
+      if (clienteSesion) {
+        const vigente = await identificarClienteTienda(empresa.id, clienteSesion.uid);
+        if (!vigente || vigente.lista_key !== listaActiva || vigente.lista_nombre !== clienteSesion.lista_nombre) {
+          setClienteSesion(vigente);
+          recordarClienteTienda(empresa.id, vigente);
+          setPaso("carrito");
+          setErrorEnvio("Tu acceso o lista de precios cambió. Revisá el carrito antes de confirmar otra vez.");
+          return;
+        }
+      }
       const controlaStock = empresa.control_stock === true;
       let fresco = null;
       if (controlaStock) {
@@ -3283,7 +3466,8 @@ function Tienda() {
         empresa_id: empresa.id,
         fecha: new Date().toISOString(),
         cliente_nom: cliNom.trim().slice(0, 200),
-        cliente_id: cliTel.replace(/[^0-9]/g, "").slice(0, 20),
+        cliente_id: clienteSesion ? clienteSesion.uid : cliTel.replace(/[^0-9]/g, "").slice(0, 20),
+        lista: nombreListaActiva,
         obs: obsParts.join(" · ").slice(0, 500),
         items: itemsBackup,
         total: totalFinal,
@@ -3461,6 +3645,7 @@ function Tienda() {
         setErrorEnvio("No se pudo enviar el pedido. Revisá tu conexión e intentá de nuevo (tu carrito no se perdió).");
       }
     } finally {
+      enviandoRef.current = false;
       setEnviando(false);
     }
   };
@@ -3599,7 +3784,7 @@ function Tienda() {
   };
   // Compartir la tienda (Web Share API nativo; si no, copia el link o abre WhatsApp).
   const compartirTienda = async () => {
-    const url = window.location.href;
+    const url = rutaTienda(window.location.href).publica;
     const titulo = nombreTienda || "Tienda online";
     const texto = `Mirá el catálogo de ${titulo}: `;
     try {
@@ -3656,6 +3841,7 @@ function Tienda() {
     return clon;
   };
   const abrirAdmin = () => {
+    if (!rutaTienda(window.location.href).admin) return;
     // Si viene de la vista previa, NO re-sembramos: se conservan los cambios que estaba probando.
     if (adminOk) {
       if (!vistaPrevia) setEditCfg(cfgParaEditar());
@@ -3672,6 +3858,7 @@ function Tienda() {
     setLoginErr("");
   };
   const hacerLogin = async () => {
+    if (!rutaTienda(window.location.href).admin || loginCargando) return;
     if (!empresa) {
       setLoginErr("No se cargó la empresa. Verificá el enlace de acceso.");
       return;
@@ -3681,6 +3868,7 @@ function Tienda() {
     try {
       const res = await validarAdmin(empresa.id, loginUid.trim(), loginPass, empresa.codigo);
       if (res.ok) {
+        if (res.user.token) SB_HDR["x-empresa-token"] = res.user.token;
         setAdminOk(true);
         setLoginOpen(false);
         setLoginPass("");
@@ -3700,6 +3888,9 @@ function Tienda() {
     }
   };
   const salirAdmin = () => {
+    delete SB_HDR["x-empresa-token"];
+    window.history.replaceState(null, "", rutaTienda(window.location.href).publica);
+    setLoginOpen(false);
     setAdminOk(false);
     setEditorOpen(false);
     setVistaPrevia(false);
@@ -3936,13 +4127,13 @@ function Tienda() {
     }).slice(0, 8);
   }, [busqDest, productosRaw, editCfg.destacados]);
   const guardar = async () => {
+    if (!adminOk || !empresa || !rutaTienda(window.location.href).admin || guardando) return;
     if (!empresa) return;
     setGuardando(true);
     try {
       await guardarConfig(empresa.id, editCfg);
       setCfgBase(editCfg);
-      setVistaPrevia(false);
-      setEditorOpen(false);
+      salirAdmin();
       setSlide(0);
       alert("✅ Cambios guardados");
     } catch (e) {
@@ -4734,18 +4925,17 @@ function Tienda() {
       color: TEMA.textoSuave
     }
   }))), /*#__PURE__*/React.createElement("button", {
-    onClick: abrirAdmin,
-    title: "Administrar tienda",
-    "aria-label": "Administrar tienda",
+    onClick: () => setClienteOpen(true),
+    disabled: enviando || !empresa,
+    title: clienteSesion ? "Mi cuenta · " + clienteSesion.uid : "Ingresar con mi ID",
+    "aria-label": clienteSesion ? "Mi cuenta" : "Ingresar con mi ID",
     className: "shrink-0 p-2 sm:p-2.5 rounded-xl transition active:scale-95",
     style: {
       background: TEMA.bgCard,
       border: `1px solid ${TEMA.borde}`,
-      color: adminOk ? TEMA.gold : TEMA.textoSuave
+      color: TEMA.gold
     }
-  }, /*#__PURE__*/React.createElement(Settings, {
-    size: 18
-  })), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("span", {className: "text-lg", "aria-hidden": true}, "👤")), /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       setVerSeguimiento(true);
       setSegEstado(null);
@@ -4810,7 +5000,14 @@ function Tienda() {
     }
   }, totalUnidades)))), /*#__PURE__*/React.createElement("main", {
     className: "max-w-6xl mx-auto px-4 pb-24"
-  }, avisoTienda && (vistaPrevia || avisoCerrado !== avisoTienda.clave) && /*#__PURE__*/React.createElement("div", {
+  }, React.createElement("div", {className: "mt-3 rounded-xl px-3 py-2.5 flex items-center justify-between gap-3",
+    style: {background: TEMA.bgCard, border: "1px solid " + TEMA.borde}},
+    React.createElement("div", {style: {fontSize: 12, lineHeight: 1.5}, role: "status"},
+      React.createElement("strong", {style: {color: TEMA.gold}}, clienteCargando ? "Verificando tu acceso…" : clienteSesion ? "Tus precios de cliente" : "Precios de venta al público"),
+      React.createElement("div", {style: {color: clienteError ? TEMA.oferta : TEMA.textoSuave}}, clienteError ? "No se pudo verificar tu acceso. Reintentá para usar tus precios." : clienteSesion ? "ID " + clienteSesion.uid + " · " + nombreListaActiva : "¿Ya sos cliente? Ingresá con tu ID.")),
+    React.createElement("button", {onClick: () => setClienteOpen(true), disabled: enviando || !empresa,
+      style: {fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", color: TEMA.gold}}, clienteSesion ? "Mi cuenta" : "Ingresar")),
+    avisoTienda && (vistaPrevia || avisoCerrado !== avisoTienda.clave) && /*#__PURE__*/React.createElement("div", {
     className: "mt-4 rounded-xl px-3 py-2.5 flex items-start gap-2.5",
     style: {
       background: TEMA.bgCard,
@@ -5267,7 +5464,7 @@ function Tienda() {
       color: TEMA.textoSuave,
       opacity: .5
     }
-  }, "v2026.08.05-preventa1"), /*#__PURE__*/React.createElement("div", {
+  }, "v2026.09.08-clientes-id1"), /*#__PURE__*/React.createElement("div", {
     className: "h-24 md:hidden"
   })), carritoAbierto && paso === "exito" && /*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 z-50 overflow-hidden flex flex-col items-center justify-center px-6",
@@ -6039,19 +6236,22 @@ function Tienda() {
     className: "shrink-0 mt-0.5"
   }), /*#__PURE__*/React.createElement("span", null, errorEnvio)), /*#__PURE__*/React.createElement("button", {
     onClick: confirmarPedido,
-    disabled: enviando,
+    disabled: enviando || clienteCargando,
     className: "w-full py-3.5 rounded-xl font-bold transition active:scale-95 flex items-center justify-center gap-2",
     style: {
       background: TEMA.gold,
       color: TEMA.bg,
       opacity: enviando ? .6 : 1
     }
-  }, enviando ? pagaConMp ? "Redirigiendo a Mercado Pago…" : "Enviando…" : errorEnvio ? /*#__PURE__*/React.createElement(React.Fragment, null, "Reintentar · ", fmt(totalFinal)) : pagaConMp ? /*#__PURE__*/React.createElement(React.Fragment, null, "💳 Pagar con Mercado Pago · ", fmt(totalFinal)) : /*#__PURE__*/React.createElement(React.Fragment, null, "Confirmar pedido · ", fmt(totalFinal))))))), loginOpen && /*#__PURE__*/React.createElement("div", {
+  }, enviando ? pagaConMp ? "Redirigiendo a Mercado Pago…" : "Enviando…" : errorEnvio ? /*#__PURE__*/React.createElement(React.Fragment, null, "Reintentar · ", fmt(totalFinal)) : pagaConMp ? /*#__PURE__*/React.createElement(React.Fragment, null, "💳 Pagar con Mercado Pago · ", fmt(totalFinal)) : /*#__PURE__*/React.createElement(React.Fragment, null, "Confirmar pedido · ", fmt(totalFinal))))))), clienteOpen && React.createElement(AccesoClienteTienda, {
+    tema: TEMA, cliente: clienteSesion, uid: clienteId, setUid: setClienteId, error: clienteError, cargando: clienteCargando,
+    entrar: () => comprobarCliente(clienteId, true), salir: salirCliente, cerrar: () => setClienteOpen(false)
+  }), loginOpen && /*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 z-50 flex items-center justify-center p-4 overflow-hidden",
     style: {
       background: `radial-gradient(circle at 50% 35%, #13294b 0%, ${TEMA.bg} 70%)`
     },
-    onClick: () => setLoginOpen(false)
+    onClick: salirAdmin
   }, /*#__PURE__*/React.createElement(Particulas, {
     cantidad: 30
   }), /*#__PURE__*/React.createElement("div", {
@@ -6101,7 +6301,7 @@ function Tienda() {
   }, loginErr), /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2 mt-4"
   }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setLoginOpen(false),
+    onClick: salirAdmin,
     className: "px-3 py-2.5 rounded-lg text-sm",
     style: {
       background: TEMA.bgSoft,
@@ -6217,10 +6417,7 @@ function Tienda() {
   }), /*#__PURE__*/React.createElement("span", {
     className: "hidden sm:inline"
   }, "Vista previa")), /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      setVistaPrevia(false);
-      setEditorOpen(false);
-    },
+    onClick: salirAdmin,
     className: "p-2 rounded-lg",
     style: {
       background: TEMA.bgCard,
@@ -6964,16 +7161,16 @@ function Tienda() {
     style: {
       color: TEMA.gold
     }
-  }, "Lista de precios"), /*#__PURE__*/React.createElement("p", {
+  }, "Precios para visitantes"), /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] mb-3",
     style: {
       color: TEMA.textoSuave
     }
-  }, "Elegí qué lista de precios ven los clientes en la tienda. La empresa tiene ", listas.length, " listas."), /*#__PURE__*/React.createElement("select", {
-    value: editCfg.listaPrecio || listaActiva,
+  }, "Sin ingresar se muestra la lista pública. Los clientes que ingresan con su ID ven la lista asignada en Gestión de clientes."), /*#__PURE__*/React.createElement("select", {
+    value: editCfg.listaPublica || "",
     onChange: e => setEditCfg(c => ({
       ...c,
-      listaPrecio: e.target.value
+      listaPublica: e.target.value
     })),
     className: "w-full px-3 py-2.5 rounded-xl text-sm outline-none",
     style: {
@@ -6981,7 +7178,7 @@ function Tienda() {
       border: `1px solid ${TEMA.borde}`,
       color: TEMA.texto
     }
-  }, listas.map(l => /*#__PURE__*/React.createElement("option", {
+  }, React.createElement("option", {value: ""}, "Automática · Público / Precio de venta"), listas.map(l => /*#__PURE__*/React.createElement("option", {
     key: l.key,
     value: l.key
   }, l.nombre)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
@@ -7498,3 +7695,4 @@ ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.c
   </script>
 </body>
 </html>
+
