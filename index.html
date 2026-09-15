@@ -1207,6 +1207,7 @@ function mapProducto(p) {
       precio: Number(p.oferta_precio || 0), precios: p.oferta_precios || {}, hasta: p.oferta_hasta || null },
     familia: p.familia || null,
     temporada: p.temporada || "",
+    esNovedad: p.es_novedad === true,
     creadoEn: p.creado_en || null,
     esPortada: p.es_portada || false,
     precioClientes: p.precio_clientes || 0,
@@ -1292,7 +1293,7 @@ async function fetchCatVer(empId) {
   }
 }
 async function fetchProductos(empId) {
-  const ckey = "tienda_prod_v3_" + empId; // incluye ofertas por lista, invalida el formato anterior
+  const ckey = "tienda_prod_v4_" + empId; // incluye la marca manual de novedades
   const ver = await fetchCatVer(empId);
   // Si el catálogo no cambió, usar la copia local (NO baja fotos => ahorra egress)
   if (ver) {
@@ -1305,17 +1306,22 @@ async function fetchProductos(empId) {
   const COLS_NEW = COLS + ",unidad_venta,unidades_bulto,min_compra,cant_default,oferta_precio,oferta_activa,oferta_hasta,oferta_tipo,oferta_pct,oferta_precios,activo,fotos";
   const COLS_CAJA = COLS_NEW + ",precio_caja,unidad_bulto,vende_por,peso_display,detalles";
   const COLS_TEMP = COLS_CAJA + ",temporada,creado_en";
+  const COLS_NOVEDAD = COLS_TEMP + ",es_novedad";
   let rows;
   try {
-    rows = await sbGet("productos", `select=${COLS_TEMP}&empresa_id=eq.${empId}&order=nombre.asc`);
+    rows = await sbGet("productos", `select=${COLS_NOVEDAD}&empresa_id=eq.${empId}&order=nombre.asc`);
   } catch (e0) {
     try {
-      rows = await sbGet("productos", `select=${COLS_CAJA}&empresa_id=eq.${empId}&order=nombre.asc`);
+      rows = await sbGet("productos", `select=${COLS_TEMP}&empresa_id=eq.${empId}&order=nombre.asc`);
     } catch (e1) {
       try {
-        rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`);
-      } catch (e) {
-        rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`);
+        rows = await sbGet("productos", `select=${COLS_CAJA}&empresa_id=eq.${empId}&order=nombre.asc`);
+      } catch (e2) {
+        try {
+          rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`);
+        } catch (e) {
+          rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`);
+        }
       }
     }
   }
@@ -2552,6 +2558,7 @@ function Tienda() {
           _nVariantes: items.length,
           _minFamilia: port && port.minCompra > 1 ? port.minCompra : 1,
           temporada: items.some(x => x.temporada === temporadaActual()) ? temporadaActual() : "",
+          esNovedad: items.some(x => x.esNovedad === true),
            precio: minP,
           precioAntes: null,
           enOferta: hayOferta,
@@ -2569,12 +2576,18 @@ function Tienda() {
   const secciones = useMemo(() => {
     if (cat === "todos" && !soloOfertas && !busqueda) {
       const ofertas = visibles.filter(p => p.promo || p.enOferta);
+      const novedades = visibles.filter(p => p.esNovedad === true);
       const cats = [];
       visibles.forEach(p => {
         if (!cats.includes(p.cat)) cats.push(p.cat);
       });
       cats.sort(cmpCat);
       const secs = [];
+      if (novedades.length) secs.push({
+        key: "novedades",
+        label: "✨ Novedades",
+        items: novedades
+      });
       const _temp = temporadaActual();
       const _tempProds = visibles.filter(p => p.temporada === _temp);
       if (_tempProds.length) {
@@ -2711,8 +2724,8 @@ function Tienda() {
       className: "rounded-2xl overflow-hidden flex flex-col transition hover:-translate-y-0.5 h-full w-full",
       style: {
         background: TEMA.bgCard,
-        border: `1px solid ${enCarrito > 0 ? TEMA.gold : TEMA.borde}`,
-        boxShadow: enCarrito > 0 ? `0 0 0 1px ${TEMA.gold}` : "none"
+        border: enCarrito > 0 ? `2px solid ${TEMA.gold}` : p.esNovedad ? "2px solid #a855f7" : `1px solid ${TEMA.borde}`,
+        boxShadow: enCarrito > 0 ? `0 0 0 1px ${TEMA.gold}` : p.esNovedad ? "0 8px 24px #7c3aed26" : "none"
       }
     }, /*#__PURE__*/React.createElement("div", {
       "data-thumb": true,
@@ -2763,7 +2776,15 @@ function Tienda() {
         color: TEMA.bg,
         boxShadow: "0 2px 8px #00000055"
       }
-    }, enCarrito)), /*#__PURE__*/React.createElement("div", {
+    }, enCarrito), p.esNovedad && /*#__PURE__*/React.createElement("span", {
+      className: "absolute bottom-2 right-2 text-[10px] font-black px-2.5 py-1 rounded-full",
+      style: {
+        background: "linear-gradient(135deg,#7c3aed,#ec4899)",
+        color: "#fff",
+        letterSpacing: ".45px",
+        boxShadow: "0 3px 10px #4c1d9555"
+      }
+    }, "✨ NUEVO")), /*#__PURE__*/React.createElement("div", {
       className: "p-3 flex flex-col flex-1"
     }, /*#__PURE__*/React.createElement("h3", {
       onClick: () => setDetalle(p),
@@ -2889,7 +2910,7 @@ function Tienda() {
       className: "flex items-center gap-3 rounded-xl px-2.5 py-2 transition",
       style: {
         background: TEMA.bgCard,
-        border: `1px solid ${enCarrito > 0 ? TEMA.gold : TEMA.borde}`
+        border: enCarrito > 0 ? `2px solid ${TEMA.gold}` : p.esNovedad ? "2px solid #a855f7" : `1px solid ${TEMA.borde}`
       }
     }, /*#__PURE__*/React.createElement("div", {
       "data-thumb": true,
@@ -2916,7 +2937,14 @@ function Tienda() {
       onClick: () => setDetalle(p)
     }, /*#__PURE__*/React.createElement("div", {
       className: "text-sm font-medium leading-snug line-clamp-1"
-    }, p.nombre), p.temporada === temporadaActual() && /*#__PURE__*/React.createElement("span", {
+    }, p.nombre), p.esNovedad && /*#__PURE__*/React.createElement("span", {
+      className: "inline-flex text-[9px] font-black px-2 py-0.5 rounded-full mt-0.5 mr-1",
+      style: {
+        background: "linear-gradient(135deg,#7c3aed,#ec4899)",
+        color: "#fff",
+        letterSpacing: ".35px"
+      }
+    }, "✨ NUEVO"), p.temporada === temporadaActual() && /*#__PURE__*/React.createElement("span", {
       className: "inline-flex text-[9px] font-extrabold px-1.5 py-0.5 rounded-full mt-0.5",
       style: {
         background: temporadaInfo(p.temporada).color,
@@ -5239,7 +5267,7 @@ function Tienda() {
       if (restantes <= 0) break;
       // Las vitrinas (ofertas y destacados) van en carrusel y muestran
       // todas sin consumir el límite de "ver más productos".
-      const esVitrina = sec.key === "ofertas" || sec.key === "destacados" || sec.key === "temporada";
+      const esVitrina = sec.key === "novedades" || sec.key === "ofertas" || sec.key === "destacados" || sec.key === "temporada";
       const itemsMostrar = esVitrina ? sec.items : sec.items.slice(0, restantes);
       if (!itemsMostrar.length) continue;
       if (!esVitrina) restantes -= itemsMostrar.length;
@@ -5249,7 +5277,7 @@ function Tienda() {
       }, sec.label && /*#__PURE__*/React.createElement("h2", {
         className: "text-base font-extrabold mb-2 px-0.5",
         style: {
-          color: sec.key === "ofertas" ? TEMA.oferta : sec.key === "temporada" ? temporadaInfo(temporadaActual()).color : TEMA.gold,
+          color: sec.key === "novedades" ? "#a855f7" : sec.key === "ofertas" ? TEMA.oferta : sec.key === "temporada" ? temporadaInfo(temporadaActual()).color : TEMA.gold,
           fontFamily: "var(--f-tit)"
         }
       }, sec.label), esVitrina && vista !== "lista" ? /*#__PURE__*/React.createElement("div", {
@@ -5464,7 +5492,7 @@ function Tienda() {
       color: TEMA.textoSuave,
       opacity: .5
     }
-  }, "v2026.09.08-clientes-id1"), /*#__PURE__*/React.createElement("div", {
+  }, "v2026.09.15-novedades1"), /*#__PURE__*/React.createElement("div", {
     className: "h-24 md:hidden"
   })), carritoAbierto && paso === "exito" && /*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 z-50 overflow-hidden flex flex-col items-center justify-center px-6",
@@ -7695,4 +7723,3 @@ ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.c
   </script>
 </body>
 </html>
-
