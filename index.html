@@ -441,6 +441,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
 
   <div id="root"></div>
 
+  <script src="iclap-catalogo-v1.js?v=20261119-1"></script>
   <script>
 /* @jsxRuntime classic */
 const {
@@ -2100,6 +2101,7 @@ function Tienda() {
   const [cargando, setCargando] = useState(true);
   const [aviso, setAviso] = useState("");
   const [cfgBase, setCfgBase] = useState(CFG_DEFAULT);
+  const [iclapConfigOk, setIclapConfigOk] = useState(false);
   // Lo que el admin está editando en el editor (todavía sin guardar).
   const [editCfg, setEditCfg] = useState(CFG_DEFAULT);
   const [busqDest, setBusqDest] = useState(""); // buscador del selector de destacados
@@ -2301,7 +2303,7 @@ function Tienda() {
           return;
         }
         setEmpresa(emp);
-        const [prods, savedCfg, lists, fams, stk] = await Promise.all([fetchProductos(emp.id), fetchConfig(emp.id).catch(() => null), fetchListas(emp.id).catch(() => []), fetchFamilias(emp.id).catch(() => ({})),
+        const [prods, savedCfg, lists, fams, stk] = await Promise.all([fetchProductos(emp.id), fetchConfig(emp.id).then(value => { setIclapConfigOk(true); return value; }).catch(() => null), fetchListas(emp.id).catch(() => []), fetchFamilias(emp.id).catch(() => ({})),
         // El inventario sólo participa si la empresa activó expresamente el
         // control. Con el interruptor apagado la tienda trabaja en preventa.
         emp.control_stock === true ? fetchStockDisponible(emp.id).catch(() => null) : Promise.resolve(null)]);
@@ -5092,7 +5094,9 @@ function Tienda() {
     }
   }, totalUnidades)))), /*#__PURE__*/React.createElement("main", {
     className: "max-w-6xl mx-auto px-4 pb-24"
-  }, React.createElement("div", {className: "mt-3 rounded-xl px-3 py-2.5 flex items-center justify-between gap-3",
+  }, window.IClapCatalogo && empresa && !cargando && iclapConfigOk && IClapCatalogo.permitido(empresa.codigo) && React.createElement(IClapCatalogo.Section, {
+    codigo: empresa.codigo, config: cfg.iclap, style: {marginTop:16,"--ic-bg":TEMA.bgCard,"--ic-text":TEMA.texto,"--ic-border":TEMA.borde}
+  }), React.createElement("div", {className: "mt-3 rounded-xl px-3 py-2.5 flex items-center justify-between gap-3",
     style: {background: TEMA.bgCard, border: "1px solid " + TEMA.borde}},
     React.createElement("div", {style: {fontSize: 12, lineHeight: 1.5}, role: "status"},
       React.createElement("strong", {style: {color: TEMA.gold}}, clienteCargando ? "Verificando tu acceso…" : clienteSesion ? "Tus precios de cliente" : "Precios de venta al público"),
@@ -6530,7 +6534,9 @@ function Tienda() {
     size: 16
   }), " ", guardando ? "Guardando…" : "Guardar"))), /*#__PURE__*/React.createElement("div", {
     className: "max-w-2xl mx-auto px-4 py-5 space-y-6 pb-24"
-  }, /*#__PURE__*/React.createElement("div", {
+  }, window.IClapCatalogo && empresa && IClapCatalogo.permitido(empresa.codigo) && React.createElement(IClapCatalogo.Editor, {
+    codigo: empresa.codigo, value: editCfg.iclap, onChange: value => setEF("iclap", value), style: {"--ic-bg":TEMA.bgCard,"--ic-text":TEMA.texto,"--ic-border":TEMA.borde}
+  }), /*#__PURE__*/React.createElement("div", {
     className: "rounded-xl p-3",
     style: {
       background: TEMA.bgCard,
