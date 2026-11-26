@@ -1149,11 +1149,18 @@ async function identificarClienteTienda(empresaId, uid) {
 }
 function rutaTienda(url) {
   const u = new URL(url);
-  const admin = /\/admin\/?$/i.test(u.pathname);
+  const admin = window.parent === window && /\/admin\/?$/i.test(u.pathname);
   const codigo = u.searchParams.get("emp") || u.searchParams.get("e") || "";
   if (admin) u.pathname = u.pathname.replace(/admin\/?$/i, "").replace(/(\.html)\/$/i, "$1");
   u.hash = "";
   return { admin, codigo, publica: u.href };
+}
+const ORIGENES_PANEL_TIENDA = new Set(["https://pagina-clientes-pedidos.vercel.app"]);
+function editorEmbebidoTienda() {
+  return window.parent !== window && window.location.hash === "#editor-panel";
+}
+function idMensajeEditorTienda() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,"0")).join("");
 }
 function AccesoClienteTienda({tema, cliente, uid, setUid, error, cargando, invitacion, activar, entrar, salir, cerrar}) {
   const panel = useRef(null);
@@ -2379,6 +2386,10 @@ function Tienda() {
   const [slide, setSlide] = useState(0);
 
   // Admin
+  const enPanelEditor = editorEmbebidoTienda();
+  const enlaceEditorPanel = useRef(null);
+  const guardadoEditorPanel = useRef(null);
+  const [inicioEditorPanel, setInicioEditorPanel] = useState(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [adminOk, setAdminOk] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -2455,7 +2466,7 @@ function Tienda() {
     if (invitacionCliente?.limpia) window.history.replaceState(null, "", invitacionCliente.limpia);
   }, []);
   useEffect(() => {
-    if (!empresa || cargando || rutaTienda(window.location.href).admin) return;
+    if (!empresa || cargando || enPanelEditor || rutaTienda(window.location.href).admin) return;
     const restaurar = () => {
       if (invitacionPendiente.current) return;
       const uid = leerIdClienteTienda(empresa.id);
@@ -2488,7 +2499,36 @@ function Tienda() {
     setDetalle(null); setCuponAplicado(null); setPaso("carrito");
   }, [listaActiva]);
   useEffect(() => {
-    if (!empresa || cargando) return;
+    if (!enPanelEditor) return;
+    const escuchar = ev => {
+      if (ev.source !== window.parent || !ORIGENES_PANEL_TIENDA.has(ev.origin)) return;
+      const d=ev.data;
+      if (!d || d.canal!=="tienda-editor-v1" || typeof d.id!=="string" || !/^[0-9a-f]{32}$/.test(d.id)) return;
+      if (d.tipo==="inicio" && !enlaceEditorPanel.current && typeof d.empresa==="string" && d.config && typeof d.config==="object" && !Array.isArray(d.config)) {
+        const sesion={id:d.id,empresa:d.empresa,config:d.config,origen:ev.origin};
+        enlaceEditorPanel.current=sesion;
+        setInicioEditorPanel(sesion);
+      }
+      const sesion=enlaceEditorPanel.current, pendiente=guardadoEditorPanel.current;
+      if(d.tipo==="guardado" && sesion?.id===d.id && sesion.origen===ev.origin && pendiente?.solicitud===d.solicitud) {
+        if(d.ok===true)pendiente.resolver();else pendiente.fallar(new Error(typeof d.mensaje==="string"?d.mensaje:"No se pudo guardar."));
+      }
+    };
+    window.addEventListener("message",escuchar);
+    let padre="";
+    try{padre=new URL(document.referrer).origin;}catch(_){}
+    if(!ORIGENES_PANEL_TIENDA.has(padre))padre=window.location.ancestorOrigins?.[0]||"";
+    if(ORIGENES_PANEL_TIENDA.has(padre))window.parent.postMessage({canal:"tienda-editor-v1",tipo:"listo"},padre);
+    return () => window.removeEventListener("message",escuchar);
+  }, [enPanelEditor]);
+  useEffect(() => {
+    if(cargando || !empresa || !inicioEditorPanel || inicioEditorPanel.empresa!==empresa.id) return;
+    const base=mergeCfg(inicioEditorPanel.config);
+    setCfgBase(base);setEditCfg(cfgParaEditar(base));setVistaPrevia(false);setEditorOpen(true);
+    window.parent.postMessage({canal:"tienda-editor-v1",tipo:"activo",id:inicioEditorPanel.id},inicioEditorPanel.origen);
+  }, [empresa, cargando, inicioEditorPanel]);
+  useEffect(() => {
+    if (enPanelEditor || !empresa || cargando) return;
     const abrirRuta = () => {
       if (rutaTienda(window.location.href).admin) abrirAdmin();
       else { setLoginOpen(false); setEditorOpen(false); setVistaPrevia(false); setAdminOk(false); delete SB_HDR["x-empresa-token"]; }
@@ -2496,7 +2536,7 @@ function Tienda() {
     abrirRuta();
     window.addEventListener("popstate", abrirRuta);
     return () => window.removeEventListener("popstate", abrirRuta);
-  }, [empresa, cargando]);
+  }, [empresa, cargando, enPanelEditor]);
   useEffect(() => {
     (async () => {
       try {
@@ -2541,7 +2581,7 @@ function Tienda() {
 
   // Restaurar carrito guardado al resolver la empresa
   useEffect(() => {
-    if (!empresa || restoredRef.current) return;
+    if (!empresa || restoredRef.current || enPanelEditor) return;
     restoredRef.current = true;
     try {
       const raw = localStorage.getItem("tienda_cart_" + empresa.codigo);
@@ -2622,7 +2662,7 @@ function Tienda() {
 
   // Guardar carrito + datos del cliente ante cualquier cambio
   useEffect(() => {
-    if (!empresa || !restoredRef.current) return;
+    if (!empresa || !restoredRef.current || enPanelEditor) return;
     try {
       localStorage.setItem("tienda_cart_" + empresa.codigo, JSON.stringify({
         carrito,
@@ -3666,6 +3706,7 @@ function Tienda() {
   // Inserta el pedido en backup_pedidos (sección Backup Pedidos de tu app)
   const confirmarPedido = async () => {
     if (!empresa) return;
+    if(enPanelEditor){setErrorEnvio("Estás en la vista previa. No se enviaron pedidos.");return;}
     if (enviandoRef.current || clienteVerificando.current) return;
     if (invitacionCliente) { setClienteOpen(true); return; }
     if (!clienteSesion && leerIdClienteTienda(empresa.id)) {
@@ -4158,11 +4199,11 @@ function Tienda() {
   };
 
   /* ---- Admin ---- */
-  const cfgParaEditar = () => {
+  const cfgParaEditar = (base = cfgBase) => {
     /* Ojo: se clona SIEMPRE de cfgBase (lo guardado), nunca de cfg — si no,
        estando en vista previa el editor se re-sembraría con los cambios de
        prueba y "Descartar" no descartaría nada. */
-    const clon = JSON.parse(JSON.stringify(cfgBase));
+    const clon = JSON.parse(JSON.stringify(base));
     /* Ojo: las categorías salen de productosRaw (TODOS los productos), no del
        catálogo ya filtrado. Si sacáramos la lista del catálogo, una categoría
        recién ocultada desaparecería también del editor y la distribuidora no
@@ -4227,7 +4268,16 @@ function Tienda() {
       setLoginCargando(false);
     }
   };
+  const salirEditorPanel = () => {
+    const sesion = enlaceEditorPanel.current;
+    enlaceEditorPanel.current = null;
+    setEditorOpen(false);
+    setVistaPrevia(false);
+    if (sesion) window.parent.postMessage({canal:"tienda-editor-v1",tipo:"cerrar",id:sesion.id},sesion.origen);
+  };
+
   const salirAdmin = () => {
+    if (enPanelEditor) { salirEditorPanel(); return; }
     delete SB_HDR["x-empresa-token"];
     window.history.replaceState(null, "", rutaTienda(window.location.href).publica);
     setLoginOpen(false);
@@ -4467,7 +4517,30 @@ function Tienda() {
       return (p.nombre || "").toLowerCase().includes(q) || String(p.codigo || "").toLowerCase().includes(q);
     }).slice(0, 8);
   }, [busqDest, productosRaw, editCfg.destacados]);
+  const guardarDesdePanel = async () => {
+    const sesion=enlaceEditorPanel.current;
+    if (!enPanelEditor || !sesion || !empresa || sesion.empresa!==empresa.id || guardando || guardadoEditorPanel.current) return;
+    const solicitud=idMensajeEditorTienda();let timer;
+    setGuardando(true);
+    try {
+      await new Promise((resolver,fallar)=>{
+        guardadoEditorPanel.current={solicitud,resolver,fallar};
+        timer=setTimeout(()=>fallar(new Error("El panel no respondió. Volvé a abrir el editor para verificar lo guardado.")),20000);
+        window.parent.postMessage({canal:"tienda-editor-v1",tipo:"guardar",id:sesion.id,solicitud,config:editCfg},sesion.origen);
+      });
+      setCfgBase(editCfg);
+      setVistaPrevia(true);setEditorOpen(false);
+      setSlide(0);
+      alert("✅ Cambios guardados");
+    } catch (e) {
+      alert("❌ No se pudo guardar: " + e.message);
+    } finally {
+      clearTimeout(timer);guardadoEditorPanel.current=null;
+      setGuardando(false);
+    }
+  };
   const guardar = async () => {
+    if (enPanelEditor) return guardarDesdePanel();
     if (!adminOk || !empresa || !rutaTienda(window.location.href).admin || guardando) return;
     if (!empresa) return;
     setGuardando(true);
@@ -6717,7 +6790,7 @@ function Tienda() {
     className: "flex items-center gap-2"
   }, /*#__PURE__*/React.createElement("button", {
     onClick: salirAdmin,
-    title: "Cerrar sesión",
+    title: enPanelEditor ? "Cerrar editor" : "Cerrar sesión",
     className: "p-2 rounded-lg",
     style: {
       background: TEMA.bgCard,
@@ -7983,6 +8056,12 @@ function Tienda() {
     onChange: e => {
       const file = e.target.files[0];
       if (!file) return;
+      if (enPanelEditor) {
+        e.target.value = "";
+        comprimirImagen(file,1400,175).then(foto=>setBan(i,"foto",foto))
+          .catch(err=>alert(err.message || "No se pudo preparar la imagen del banner."));
+        return;
+      }
       const rd = new FileReader();
       rd.onload = async ev => {
         const url = await subirImagenTienda(ev.target.result, empresa && empresa.id, "banner");
