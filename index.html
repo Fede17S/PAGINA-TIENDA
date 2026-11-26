@@ -2281,7 +2281,7 @@ function Tienda() {
         setClienteSesion(null);
         if (token) { clienteToken.current = ""; clientePerfilAplicado.current = ""; cargarEnvioCliente(null); limpiarHistorialPersonal(); }
         if (activar) setInvitacionCliente(null);
-        setClienteError(token ? "El acceso no es válido, venció o ya se usó. Si ya lo activaste en este navegador, abrí la tienda sin el enlace. Si no, pedile uno nuevo a la distribuidora." : "No encontramos un cliente con ese ID y una lista válida en esta tienda. Consultá a la distribuidora.");
+        setClienteError(token ? (activar ? "El enlace no es válido, ya se usó o fue reemplazado. Si ya lo activaste en este navegador, abrí la tienda sin el enlace. Si no, pedile uno nuevo a la distribuidora." : "Tu sesión terminó. Pedile un enlace nuevo a la distribuidora para volver a cargar tus datos de envío.") : "No encontramos un cliente con ese ID y una lista válida en esta tienda. Consultá a la distribuidora.");
         return;
       }
       const sesion = token ? (activar ? c.sesion_token : token) : "";
