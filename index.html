@@ -1057,13 +1057,49 @@ function leerIdClienteTienda(empresaId) {
     return sesion && sesion.empresa_id === empresaId && typeof sesion.uid === "string" ? sesion.uid : "";
   } catch (_) { return ""; }
 }
-function recordarClienteTienda(empresaId, cliente) {
+function tokenSesionClienteTienda(empresaId) {
+  try {
+    const s = JSON.parse(localStorage.getItem(claveSesionClienteTienda(empresaId)) || "null");
+    return s && s.empresa_id === empresaId && /^[a-f0-9]{64}$/.test(s.token || "") ? s.token : "";
+  } catch (_) { return ""; }
+}
+function recordarClienteTienda(empresaId, cliente, token = "") {
   try {
     const key = claveSesionClienteTienda(empresaId);
-    if (cliente) localStorage.setItem(key, JSON.stringify({empresa_id: empresaId, uid: cliente.uid}));
+    if (cliente) localStorage.setItem(key, JSON.stringify({empresa_id: empresaId, uid: cliente.uid, ...(token ? {token} : {})}));
     else localStorage.removeItem(key);
     return true;
   } catch (_) { return false; }
+}
+function enlacePersonalTienda(url) {
+  const u = new URL(url);
+  if (/\/admin\/?$/i.test(u.pathname)) return null;
+  const h = new URLSearchParams(u.hash.slice(1));
+  if (!h.has("acceso")) return null;
+  const token = h.get("acceso") || "";
+  u.hash = "";
+  return { token: /^[a-f0-9]{64}$/.test(token) ? token : "", limpia: u.href };
+}
+async function accesoEnvioTienda(empresaId, token, accion) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/rpc/tienda_acceso_envio_v1`, {
+      method: "POST", headers: { apikey: SB_KEY, Authorization: "Bearer " + SB_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({p_empresa: empresaId, p_token: token, p_accion: accion}), signal: controller.signal, cache: "no-store"
+    });
+    if (!r.ok) throw new Error("No se pudo verificar tu acceso personal.");
+    const c = await r.json();
+    if (accion === "salir") return null;
+    if (!c || c.empresa_id !== empresaId || !c.uid || !c.lista_key || !c.lista_nombre || !c.envio) return null;
+    return accion === "activar" && !/^[a-f0-9]{64}$/.test(c.sesion_token || "") ? null : c;
+  } finally { clearTimeout(timer); }
+}
+function zonaPerfilTienda(nombre, zonas) {
+  const norm = v => String(v || "").trim().toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const k = norm(nombre);
+  const compatibles = k && Array.isArray(zonas) ? zonas.filter(z => z && norm(z.nombre) === k) : [];
+  return compatibles.length === 1 ? compatibles[0].nombre : "";
 }
 async function identificarClienteTienda(empresaId, uid) {
   const controller = new AbortController();
@@ -1086,7 +1122,7 @@ function rutaTienda(url) {
   u.hash = "";
   return { admin, codigo, publica: u.href };
 }
-function AccesoClienteTienda({tema, cliente, uid, setUid, error, cargando, entrar, salir, cerrar}) {
+function AccesoClienteTienda({tema, cliente, uid, setUid, error, cargando, invitacion, activar, entrar, salir, cerrar}) {
   const panel = useRef(null);
   useEffect(() => {
     const anterior = document.activeElement;
@@ -1107,11 +1143,12 @@ function AccesoClienteTienda({tema, cliente, uid, setUid, error, cargando, entra
       style: {width: "100%", maxWidth: 410, padding: 24, borderRadius: 24, background: tema.bgCard, color: tema.texto,
         border: "1px solid " + tema.borde, boxShadow: "0 24px 80px #0006", maxHeight: "90dvh", overflowY: "auto"}},
       React.createElement("div", {style: {display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18}},
-        React.createElement("h2", {id: "cliente-titulo", style: {fontSize: 22, fontWeight: 800}}, cliente ? "Tu cuenta" : "Precios para clientes"),
+        React.createElement("h2", {id: "cliente-titulo", style: {fontSize: 22, fontWeight: 800}}, invitacion ? "Tu acceso personal" : cliente ? "Tu cuenta" : "Precios para clientes"),
         React.createElement("button", {type: "button", onClick: cerrar, "aria-label": "Cerrar acceso de clientes", style: {...boton, background: tema.bgSoft}}, "✕")),
       React.createElement("p", {style: {fontSize: 14, lineHeight: 1.6, color: tema.textoSuave, marginBottom: 20}},
-        cliente ? "Ingresaste con el ID " + cliente.uid + ". Estás viendo tu lista " + cliente.lista_nombre + "." : "Ingresá el ID que te dio la distribuidora para ver tus precios. Lo recordaremos en este dispositivo."),
-      !cliente && React.createElement("form", {onSubmit: e => {e.preventDefault(); if (!cargando && uid.trim()) entrar();}},
+        invitacion ? "Activá el enlace que te envió la distribuidora para ver tus precios y completar el envío con los datos de tu ficha." : cliente ? "Ingresaste con el ID " + cliente.uid + ". Estás viendo tu lista " + cliente.lista_nombre + "." : "Ingresá el ID que te dio la distribuidora para ver tus precios. Lo recordaremos en este dispositivo."),
+      invitacion && React.createElement("button", {type: "button", onClick: activar, disabled: cargando, style: {...boton, width: "100%", background: tema.gold, color: tema.bg}}, cargando ? "Activando…" : "Activar mi acceso"),
+      !cliente && !invitacion && React.createElement("form", {onSubmit: e => {e.preventDefault(); if (!cargando && uid.trim()) entrar();}},
         React.createElement("label", {htmlFor: "cliente-id", style: {display: "block", fontSize: 13, fontWeight: 700, marginBottom: 8}}, "ID de cliente"),
         React.createElement("input", {id: "cliente-id", value: uid, onChange: e => setUid(e.target.value), maxLength: 100,
           autoComplete: "username", autoCapitalize: "none", spellCheck: false, placeholder: "Ej.: CL151", disabled: cargando,
@@ -2096,6 +2133,11 @@ function Tienda() {
   const [clienteId, setClienteId] = useState("");
   const [clienteError, setClienteError] = useState("");
   const [clienteCargando, setClienteCargando] = useState(false);
+  const [invitacionCliente, setInvitacionCliente] = useState(() => enlacePersonalTienda(window.location.href));
+  const invitacionPendiente = useRef(invitacionCliente);
+  invitacionPendiente.current = invitacionCliente;
+  const clienteToken = useRef("");
+  const clientePerfilAplicado = useRef("");
   const clienteSolicitud = useRef(0);
   const clienteVerificando = useRef(false);
   const [cargando, setCargando] = useState(true);
@@ -2176,6 +2218,7 @@ function Tienda() {
   const [cliTel, setCliTel] = useState("");
   const [cliDir, setCliDir] = useState("");
   const [cliZona, setCliZona] = useState(""); // zona de envío elegida al confirmar
+  const [cliRecibe, setCliRecibe] = useState("");
   const [verCond, setVerCond] = useState(false); // condiciones de venta desplegadas
   const [copiado, setCopiado] = useState(""); // qué dato se acaba de copiar
   const [enviando, setEnviando] = useState(false);
@@ -2214,29 +2257,49 @@ function Tienda() {
   const [loginErr, setLoginErr] = useState("");
   const [loginCargando, setLoginCargando] = useState(false);
   const [guardando, setGuardando] = useState(false);
-  const comprobarCliente = async (uid, cerrar = false) => {
+  const cargarEnvioCliente = envio => {
+    const d = envio || {};
+    setCliNom(String(d.nombre || "")); setCliTel(String(d.telefono || ""));
+    setCliDir(String(d.direccion || "")); setCliRecibe(String(d.recibe || ""));
+    setCliZona(zonaPerfilTienda(d.zona, cfgBase.zonasEnvio));
+  };
+  const limpiarHistorialPersonal = () => {
+    setUltimoPedido(null); setTrackCode(""); setSegEstado(null); setSegInput(""); setVerSeguimiento(false);
+  };
+  const comprobarCliente = async (uid, cerrar = false, token = "", activar = false) => {
     if (!empresa || enviandoRef.current) return;
+    if (activar && clienteVerificando.current) return;
     const solicitud = ++clienteSolicitud.current;
     clienteVerificando.current = true;
     setClienteCargando(true);
     setClienteError("");
     try {
-      const c = await identificarClienteTienda(empresa.id, uid);
+      const c = token ? await accesoEnvioTienda(empresa.id, token, activar ? "activar" : "perfil") : await identificarClienteTienda(empresa.id, uid);
       if (solicitud !== clienteSolicitud.current) return;
-      setClienteSesion(c);
       if (!c) {
-        recordarClienteTienda(empresa.id, null);
-        setClienteError("No encontramos un cliente con ese ID y una lista válida en esta tienda. Consultá a la distribuidora.");
+        if (!activar) recordarClienteTienda(empresa.id, null);
+        setClienteSesion(null);
+        if (token) { clienteToken.current = ""; clientePerfilAplicado.current = ""; cargarEnvioCliente(null); limpiarHistorialPersonal(); }
+        if (activar) setInvitacionCliente(null);
+        setClienteError(token ? "El acceso no es válido, venció o ya se usó. Si ya lo activaste en este navegador, abrí la tienda sin el enlace. Si no, pedile uno nuevo a la distribuidora." : "No encontramos un cliente con ese ID y una lista válida en esta tienda. Consultá a la distribuidora.");
         return;
       }
+      const sesion = token ? (activar ? c.sesion_token : token) : "";
+      clienteToken.current = sesion;
+      if (c.envio && clientePerfilAplicado.current !== sesion) { cargarEnvioCliente(c.envio); limpiarHistorialPersonal(); }
+      if (!c.envio && clientePerfilAplicado.current) { cargarEnvioCliente(null); limpiarHistorialPersonal(); }
+      clientePerfilAplicado.current = sesion;
+      setClienteSesion(c);
+      if (activar) setInvitacionCliente(null);
       setClienteId(c.uid);
-      const guardado = recordarClienteTienda(empresa.id, c);
-      if (!guardado) setAviso("Ingresaste, pero el navegador no permite recordar el ID. Habilitá el almacenamiento para conservar el acceso.");
+      const guardado = recordarClienteTienda(empresa.id, c, sesion);
+      if (!guardado) setAviso("Ingresaste, pero el navegador no permite recordar el acceso para la próxima visita.");
       if (cerrar) { setClienteOpen(false); setPaso("carrito"); }
     } catch (_) {
       if (solicitud !== clienteSolicitud.current) return;
       setClienteSesion(null);
-      setClienteError("No pudimos verificar tu ID. Podés reintentar o salir y comprar a precio público.");
+      if (token) { clientePerfilAplicado.current = ""; cargarEnvioCliente(null); }
+      setClienteError(token ? "No pudimos verificar el acceso personal. Revisá tu conexión y reintentá." : "No pudimos verificar tu ID. Podés reintentar o salir y comprar a precio público.");
     } finally {
       if (solicitud === clienteSolicitud.current) {
         clienteVerificando.current = false;
@@ -2248,20 +2311,37 @@ function Tienda() {
     if (!empresa || enviandoRef.current) return;
     ++clienteSolicitud.current; // una respuesta lenta no puede volver a iniciar sesión
     clienteVerificando.current = false;
+    const token = clienteToken.current || tokenSesionClienteTienda(empresa.id);
+    if (token || clientePerfilAplicado.current) limpiarHistorialPersonal();
+    clienteToken.current = ""; clientePerfilAplicado.current = "";
     recordarClienteTienda(empresa.id, null);
+    if (token) accesoEnvioTienda(empresa.id, token, "salir").catch(() => {});
+    setInvitacionCliente(null);
     setClienteSesion(null); setClienteId(""); setClienteError(""); setClienteCargando(false);
     setClienteOpen(false); setPaso("carrito"); setCuponAplicado(null);
-    setCliNom(""); setCliTel(""); setCliDir(""); setCliZona("");
+    cargarEnvioCliente(null);
   };
   useEffect(() => {
-    if (!empresa) return;
+    if (invitacionCliente?.limpia) window.history.replaceState(null, "", invitacionCliente.limpia);
+  }, []);
+  useEffect(() => {
+    if (!empresa || cargando || rutaTienda(window.location.href).admin) return;
     const restaurar = () => {
+      if (invitacionPendiente.current) return;
       const uid = leerIdClienteTienda(empresa.id);
-      if (uid) { setClienteId(uid); comprobarCliente(uid); }
+      const token = clienteToken.current || tokenSesionClienteTienda(empresa.id);
+      if (uid || token) { setClienteId(uid); comprobarCliente(uid, false, token); }
     };
-    restaurar();
+    if (invitacionPendiente.current) {
+      setClienteOpen(true);
+      if (!invitacionPendiente.current.token) {
+        setInvitacionCliente(null);
+        setClienteError("El enlace no es válido. Pedile uno nuevo a la distribuidora.");
+      }
+    } else restaurar();
     const sincronizar = e => {
       if (e.key !== claveSesionClienteTienda(empresa.id)) return;
+      clienteToken.current = tokenSesionClienteTienda(empresa.id);
       if (leerIdClienteTienda(empresa.id)) restaurar(); else salirCliente();
     };
     window.addEventListener("storage", sincronizar);
@@ -2271,7 +2351,7 @@ function Tienda() {
       window.removeEventListener("storage", sincronizar);
       window.removeEventListener("online", restaurar);
     };
-  }, [empresa]);
+  }, [empresa, cargando]);
   useEffect(() => {
     // Carrito conserva cantidades, pero precios se derivan siempre de la lista actual.
     // Cerrar el detalle evita dejar un producto con su precio anterior en el modal.
@@ -2339,13 +2419,15 @@ function Tienda() {
         const d = JSON.parse(raw);
         if (d.carrito && typeof d.carrito === "object") setCarrito(d.carrito);
         if (d.modos && typeof d.modos === "object") setModos(d.modos);
-        if (d.cliNom) setCliNom(d.cliNom);
-        if (d.cliTel) setCliTel(d.cliTel);
-        if (d.cliDir) setCliDir(d.cliDir);
-        if (d.cliZona) setCliZona(d.cliZona);
+        if (!invitacionCliente && !tokenSesionClienteTienda(empresa.id)) {
+          if (d.cliNom) setCliNom(d.cliNom);
+          if (d.cliTel) setCliTel(d.cliTel);
+          if (d.cliDir) setCliDir(d.cliDir);
+          if (d.cliZona) setCliZona(d.cliZona);
+        }
       }
       // Cargar el último pedido confirmado (para "repetir pedido")
-      const rawUlt = localStorage.getItem("tienda_ultped_" + empresa.codigo);
+      const rawUlt = !invitacionCliente && !tokenSesionClienteTienda(empresa.id) && localStorage.getItem("tienda_ultped_" + empresa.codigo);
       if (rawUlt) {
         const u = JSON.parse(rawUlt);
         if (u && u.carrito && Object.keys(u.carrito).length) setUltimoPedido(u);
@@ -2415,13 +2497,10 @@ function Tienda() {
       localStorage.setItem("tienda_cart_" + empresa.codigo, JSON.stringify({
         carrito,
         modos,
-        cliNom,
-        cliTel,
-        cliDir,
-        cliZona
+        ...((invitacionCliente || clienteToken.current || tokenSesionClienteTienda(empresa.id)) ? {} : {cliNom, cliTel, cliDir, cliZona})
       }));
     } catch (e) {/* sin persistencia */}
-  }, [carrito, modos, cliNom, cliTel, cliDir, cliZona, empresa]);
+  }, [carrito, modos, cliNom, cliTel, cliDir, cliZona, empresa, invitacionCliente, clienteSesion]);
 
   // Mostrar botón "volver arriba" al scrollear
   useEffect(() => {
@@ -3423,6 +3502,7 @@ function Tienda() {
   const confirmarPedido = async () => {
     if (!empresa) return;
     if (enviandoRef.current || clienteVerificando.current) return;
+    if (invitacionCliente) { setClienteOpen(true); return; }
     if (!clienteSesion && leerIdClienteTienda(empresa.id)) {
       setClienteOpen(true);
       setClienteError("Verificá tu ID para usar tus precios, o elegí salir y comprar a precio público.");
@@ -3458,10 +3538,12 @@ function Tienda() {
     setEnviando(true);
     try {
       if (clienteSesion) {
-        const vigente = await identificarClienteTienda(empresa.id, clienteSesion.uid);
+        const token = clienteToken.current;
+        const vigente = token ? await accesoEnvioTienda(empresa.id, token, "perfil") : await identificarClienteTienda(empresa.id, clienteSesion.uid);
         if (!vigente || vigente.lista_key !== listaActiva || vigente.lista_nombre !== clienteSesion.lista_nombre) {
           setClienteSesion(vigente);
-          recordarClienteTienda(empresa.id, vigente);
+          recordarClienteTienda(empresa.id, vigente, token);
+          if (!vigente && token) { clienteToken.current = ""; clientePerfilAplicado.current = ""; cargarEnvioCliente(null); limpiarHistorialPersonal(); }
           setPaso("carrito");
           setErrorEnvio("Tu acceso o lista de precios cambió. Revisá el carrito antes de confirmar otra vez.");
           return;
@@ -3542,6 +3624,7 @@ function Tienda() {
       const obsParts = ["📱 Pedido por tienda online"];
       if (cliTel.trim()) obsParts.push("Tel: " + cliTel.trim());
       if (cliDir.trim()) obsParts.push(cliDir.trim());
+      if (cliRecibe.trim()) obsParts.push("Recibe: " + cliRecibe.trim());
       if (zonaSel) obsParts.push("Zona: " + zonaSel.nombre);
       if (envio > 0) obsParts.push("Envío: " + fmt(envio));else if (zonaSel && envioGratis) obsParts.push("Envío sin cargo");
       if (cuponAplicado && descuentoCupon > 0) obsParts.push("Cupón " + cuponAplicado.codigo + " (−" + fmt(descuentoCupon) + ")");
@@ -3665,7 +3748,7 @@ function Tienda() {
           const pref = await pr.json();
           if (pr.ok && pref.init_point) {
             try {
-              localStorage.setItem("tienda_ultped_" + empresa.codigo, JSON.stringify({
+              if (!clienteToken.current) localStorage.setItem("tienda_ultped_" + empresa.codigo, JSON.stringify({
                 carrito: {
                   ...carrito
                 },
@@ -3721,7 +3804,7 @@ function Tienda() {
           fecha: new Date().toISOString(),
           trackCode: codigo
         };
-        localStorage.setItem("tienda_ultped_" + empresa.codigo, JSON.stringify(ult));
+        if (!clienteToken.current) localStorage.setItem("tienda_ultped_" + empresa.codigo, JSON.stringify(ult));
         setUltimoPedido(ult);
       } catch (_) {}
       setPaso("exito");
@@ -3840,9 +3923,8 @@ function Tienda() {
   };
   const nuevoPedido = () => {
     setCarrito({});
-    setCliNom("");
-    setCliTel("");
-    setCliDir("");
+    if (clienteSesion?.envio) cargarEnvioCliente(clienteSesion.envio);
+    else { setCliNom(""); setCliTel(""); setCliDir(""); }
     setPaso("carrito");
     setCarritoAbierto(false);
   };
@@ -6177,6 +6259,9 @@ function Tienda() {
     rows: 2,
     className: inputCls,
     style: inputStyle
+  }), clienteSesion?.envio && React.createElement("input", {
+    value: cliRecibe, onChange: e => setCliRecibe(e.target.value), placeholder: "Quién recibe (opcional)",
+    "aria-label": "Quién recibe", className: inputCls, maxLength: 100, style: inputStyle
   }))), (formasPago.length > 0 || hayDatosBanco) && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "text-xs font-bold mb-2 flex items-center gap-1.5",
     style: {
@@ -6341,6 +6426,7 @@ function Tienda() {
     }
   }, enviando ? pagaConMp ? "Redirigiendo a Mercado Pago…" : "Enviando…" : errorEnvio ? /*#__PURE__*/React.createElement(React.Fragment, null, "Reintentar · ", fmt(totalFinal)) : pagaConMp ? /*#__PURE__*/React.createElement(React.Fragment, null, "💳 Pagar con Mercado Pago · ", fmt(totalFinal)) : /*#__PURE__*/React.createElement(React.Fragment, null, "Confirmar pedido · ", fmt(totalFinal))))))), clienteOpen && React.createElement(AccesoClienteTienda, {
     tema: TEMA, cliente: clienteSesion, uid: clienteId, setUid: setClienteId, error: clienteError, cargando: clienteCargando,
+    invitacion: !!invitacionCliente?.token, activar: () => comprobarCliente("", true, invitacionCliente?.token, true),
     entrar: () => comprobarCliente(clienteId, true), salir: salirCliente, cerrar: () => setClienteOpen(false)
   }), loginOpen && /*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 z-50 flex items-center justify-center p-4 overflow-hidden",
