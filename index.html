@@ -568,7 +568,7 @@ const CFG_DEFAULT = {
      TODO esto arranca vacío a propósito: una distribuidora que ya está
      andando no ve ni un cambio hasta que ella misma lo carga. */
   zonasEnvio: [],
-  // [{ nombre, costo, gratisDesde, minimo }] — vacío = tarifa única de arriba
+  // [{ nombre, costo, gratisDesde, minimo, diasEntrega }] — vacío = tarifa única de arriba
   formasPago: [],
   // [{ t: "Efectivo", s: "Al recibir el pedido" }]
   alias: "",
@@ -1074,7 +1074,9 @@ function productoParaListaTienda(p, listaKey) {
     const fijo = Number(datos.precios && datos.precios[key]) || (key === "cli" ? Number(datos.precio) : 0);
     const precio = datos.tipo === "pct" && datos.pct > 0 && datos.pct < 100
       ? Math.round(base * (1 - datos.pct / 100) * 100) / 100 : fijo;
-    if (precio > 0 && precio < base) oferta = { precio, hasta: datos.hasta };
+    if (precio > 0 && precio < base && !((p.unidadVenta === "caja" || p.unidadVenta === "bulto") && Number(p.precioCaja) > 0)) {
+      oferta = { precio, hasta: datos.hasta };
+    }
   }
   // La promo y el precio de caja son condiciones comunes del producto.
   const promo = p.promo && p.promo.precio > 0 && p.promo.precio < base ? p.promo : null;
@@ -1205,6 +1207,101 @@ function temporadaInfo(t) {
     primavera: { nombre: "Primavera", emoji: "🌸", color: "#c74382" }
   }[t] || { nombre: "Temporada", emoji: "🌦️", color: "#547080" };
 }
+function normalizarBusquedaTienda(valor) {
+  return String(valor ?? "").slice(0, 350).toLowerCase().normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+}
+function terminosBusquedaTienda(valor) {
+  return normalizarBusquedaTienda(valor)
+    .replace(/\btriple a\b/g, "aaa").replace(/\bdoble a\b/g, "aa")
+    .replace(/\b(?:pilas?|baterias?)\b/g, "pila")
+    .replace(/\b(?:dentifricos?|cremas? dental(?:es)?|pastas? dental(?:es)?)\b/g, "dentifrico")
+    .replace(/\b(?:desodorantes?|desos?)\b/g, "desodorante").split(" ").filter(Boolean);
+}
+function errataBusquedaTienda(a, b) {
+  if (a.length < 5 || b.length < 4 || /\d/.test(a + b) || Math.abs(a.length - b.length) > 1) return false;
+  if (a.length === b.length) {
+    const dif = [];
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) dif.push(i);
+    return dif.length === 1 || (dif.length === 2 && dif[1] === dif[0] + 1 && a[dif[0]] === b[dif[1]] && a[dif[1]] === b[dif[0]]);
+  }
+  const [larga, corta] = a.length > b.length ? [a,b] : [b,a];
+  let i = 0;
+  while (i < corta.length && larga[i] === corta[i]) i++;
+  return larga.slice(i + 1) === corta.slice(i);
+}
+function indiceBusquedaTienda(p) {
+  const nombre = terminosBusquedaTienda([p.nombre, p.marca].filter(Boolean).join(" "));
+  const otros = terminosBusquedaTienda([p.familia, p.cat, p.detalles].filter(Boolean).join(" "));
+  return {nombre, otros, codigo: normalizarBusquedaTienda(p.codigo).replace(/ /g, ""),
+    barras: normalizarBusquedaTienda(p.codigoBarras).replace(/ /g, "")};
+}
+function puntajeBusquedaTienda(indice, consulta, terminos) {
+  if (!terminos.length) return 0;
+  if (consulta && (consulta === indice.codigo || consulta === indice.barras)) return 10000;
+  let puntaje = 0;
+  for (const t of terminos) {
+    const corto = /^(?:aa|aaa|\d+|[a-z]*\d+[a-z0-9]*)$/.test(t);
+    const contraCodigo = indice.codigo && t === indice.codigo;
+    const prefijo = s => !corto && t.length >= 3 && s.startsWith(t);
+    if (contraCodigo || indice.nombre.includes(t)) puntaje += 16;
+    else if (indice.nombre.some(prefijo)) puntaje += 10;
+    else if (!corto && (indice.otros.includes(t) || indice.otros.some(prefijo))) puntaje += 6;
+    else if (indice.nombre.some(s => errataBusquedaTienda(t, s))) puntaje += 3;
+    else return -1;
+  }
+  if (indice.nombre.join(" ").includes(terminos.join(" "))) puntaje += 12;
+  return puntaje;
+}
+function etiquetaPrecioTienda(p) {
+  if (p._esFamilia) return "Desde";
+  if (p.vendePor === "peso") return "Por kg";
+  if (p.unidadVenta === "caja" || p.unidadVenta === "bulto") return "Equivalente por unidad · solo pack cerrado";
+  return "Por unidad";
+}
+function precioMostradoUnidadTienda(p) {
+  if (!p._esFamilia && (p.unidadVenta === "caja" || p.unidadVenta === "bulto") && Number(p.precioCaja) > 0) {
+    return Number(p.precioCaja) / Math.max(1, Number(p.unidadesBulto) || 1);
+  }
+  return p.precio;
+}
+const FORMATO_PRECIO_TIENDA = new Intl.NumberFormat("es-AR", {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const fmtCompraTienda = n => "$" + FORMATO_PRECIO_TIENDA.format(Number(n) || 0);
+function etiquetaPromoTienda(p, fmt) {
+  if (!p.promo || p._esFamilia || p.enOferta || p.vendePor === "peso") return "";
+  const min = Number(p.promo.cant) || 0;
+  if (p.unidadVenta === "caja" || p.unidadVenta === "bulto") {
+    if (Number(p.precioCaja) > 0) return ""; // El carrito cobra el precio fijo de la presentación.
+    const unidades = Math.max(1, Number(p.unidadesBulto) || 1);
+    const cajas = Math.max(1, Math.ceil(min / unidades));
+    const presentacion = p.unidadBulto || p.unidadVenta;
+    return `Desde ${cajas} × ${presentacion} (${cajas * unidades} u.): ${fmt(p.promo.precio * unidades)} por ${presentacion}`;
+  }
+  const detalle = min > 1 ? `Desde ${min} unidades: ${fmt(p.promo.precio)} c/u` : `Precio promo: ${fmt(p.promo.precio)} c/u`;
+  return Number(p.precioCaja) > 0 && Number(p.unidadesBulto) > 1 && p.unidadVenta !== "unidad"
+    ? detalle + " · no aplica al pack de precio fijo" : detalle;
+}
+const DIAS_ENTREGA_TIENDA = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+const HORA_ENVIO_TIENDA = new Intl.DateTimeFormat("en-GB", {timeZone: "America/Argentina/Buenos_Aires",
+  year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
+function relojEntregaTienda(corte, ahora) {
+  const partes = Object.fromEntries(HORA_ENVIO_TIENDA.formatToParts(ahora).map(p => [p.type, Number(p.value)]));
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(corte || "").trim());
+  return {...partes, antesDelCorte: m && +m[1] < 24 && +m[2] < 60
+    ? partes.hour * 60 + partes.minute < +m[1] * 60 + +m[2] : null};
+}
+function fechaEstimadaEntregaTienda(zona, corte, ahora = new Date()) {
+  const dias = new Set(Array.isArray(zona?.diasEntrega) ? zona.diasEntrega.filter(d => Number.isInteger(d) && d >= 0 && d <= 6) : []);
+  if (!dias.size) return "";
+  const partes = relojEntregaTienda(corte, ahora);
+  const fecha = new Date(Date.UTC(partes.year, partes.month - 1, partes.day));
+  if (!partes.antesDelCorte) fecha.setUTCDate(fecha.getUTCDate() + 1);
+  for (let i = 0; i < 7; i++, fecha.setUTCDate(fecha.getUTCDate() + 1)) {
+    if (dias.has(fecha.getUTCDay())) return new Intl.DateTimeFormat("es-AR", {timeZone: "UTC",
+      weekday: "long", day: "numeric", month: "long"}).format(fecha);
+  }
+  return "";
+}
 function promoPrecioUnitarioSeguroTienda(p, precioCrudo, precioNormal) {
   const raw = Number(precioCrudo || 0);
   const normal = Number(precioNormal || 0);
@@ -1265,6 +1362,8 @@ function mapProducto(p) {
   return {
     id: p.id,
     codigo: p.codigo || "",
+    codigoBarras: p.codigo_barras || "",
+    marca: p.marca || "",
     nombre: p.nombre || "Sin nombre",
     detalles: p.detalles || "",
     cat: p.categoria || "Sin categoría",
@@ -1363,7 +1462,7 @@ async function fetchCatVer(empId) {
   }
 }
 async function fetchProductos(empId) {
-  const ckey = "tienda_prod_v4_" + empId; // incluye la marca manual de novedades
+  const ckey = "tienda_prod_v5_" + empId; // incluye códigos de barras para el buscador
   const ver = await fetchCatVer(empId);
   // Si el catálogo no cambió, usar la copia local (NO baja fotos => ahorra egress)
   if (ver) {
@@ -1379,7 +1478,8 @@ async function fetchProductos(empId) {
   const COLS_NOVEDAD = COLS_TEMP + ",es_novedad";
   let rows;
   try {
-    rows = await sbGet("productos", `select=${COLS_NOVEDAD}&empresa_id=eq.${empId}&order=nombre.asc`);
+    rows = await sbGet("productos", `select=${COLS_NOVEDAD},codigo_barras&empresa_id=eq.${empId}&order=nombre.asc`)
+      .catch(() => sbGet("productos", `select=${COLS_NOVEDAD}&empresa_id=eq.${empId}&order=nombre.asc`));
   } catch (e0) {
     try {
       rows = await sbGet("productos", `select=${COLS_TEMP}&empresa_id=eq.${empId}&order=nombre.asc`);
@@ -1390,14 +1490,14 @@ async function fetchProductos(empId) {
         try {
           rows = await sbGet("productos", `select=${COLS_NEW}&empresa_id=eq.${empId}&order=nombre.asc`);
         } catch (e) {
-          rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`);
+          rows = await sbGet("productos", `select=${COLS}&empresa_id=eq.${empId}&order=nombre.asc`).catch(() => null);
         }
       }
     }
   }
   if (!rows) {
     try {
-      const c2 = await idbGet(ckey);
+      const c2 = await idbGet(ckey) || await idbGet("tienda_prod_v4_" + empId);
       if (c2 && c2.data) return c2.data;
     } catch (e) {}
     return [];
@@ -2236,7 +2336,7 @@ function Tienda() {
   }, [productosRaw, listaActiva, stockDisp, cfg.categoriasOcultas]);
   const [cat, setCat] = useState("todos");
   const [busqueda, setBusqueda] = useState("");
-  const [orden, setOrden] = useState("nombre");
+  const [orden, setOrden] = useState("relevancia");
   const [vista, setVista] = useState("grilla"); // "grilla" (tarjetas) | "lista" (compacta mayorista)
   const [soloOfertas, setSoloOfertas] = useState(false);
   const [carrito, setCarrito] = useState({});
@@ -2682,16 +2782,26 @@ function Tienda() {
     set.sort(cmpCat);
     return ["todos", ...set];
   }, [productos, cmpCat]);
+  const indiceProductosTienda = useMemo(() => new Map(productos.map(p => [p.id, indiceBusquedaTienda(p)])), [productos]);
   const visibles = useMemo(() => {
     let arr = productos.filter(p => {
       const okCat = cat === "todos" || p.cat === cat;
-      const _bq = busqueda.toLowerCase();
-      const okBusq = p.nombre.toLowerCase().includes(_bq) || (p.codigo || "").toLowerCase().includes(_bq) || (p.familia || "").toLowerCase().includes(_bq);
-      const okOferta = !soloOfertas || p.promo || p.enOferta;
-      return okCat && okBusq && okOferta && p.activo !== false;
+      const okOferta = !soloOfertas || etiquetaPromoTienda(p, fmt) || p.enOferta;
+      return okCat && okOferta && p.activo !== false;
     });
+    const terminos = terminosBusquedaTienda(busqueda).slice(0, 12);
+    if (terminos.length) {
+      const consulta = normalizarBusquedaTienda(busqueda).replace(/ /g, "");
+      // Resultado individual: permite agregar la variante encontrada sin abrir la familia.
+      return arr.map(p => ({p, puntos: puntajeBusquedaTienda(indiceProductosTienda.get(p.id), consulta, terminos)}))
+        .filter(x => x.puntos >= 0)
+        .sort((a,b) => (b.puntos === 10000) - (a.puntos === 10000) ||
+          (orden === "precio-asc" ? a.p.precio - b.p.precio : orden === "precio-desc" ? b.p.precio - a.p.precio :
+            orden === "nombre" ? a.p.nombre.localeCompare(b.p.nombre) : 0) ||
+          b.puntos - a.puntos || a.p.nombre.localeCompare(b.p.nombre))
+        .map(x => x.p);
+    }
     // Agrupar por familia: cada familia se representa con su portada (1 tarjeta).
-    // Siempre agrupamos (también al buscar): así buscar "AXE" muestra la tarjeta de la familia.
     {
       const familias = {};
       const agrupado = [];
@@ -2720,7 +2830,7 @@ function Tienda() {
         const precios = items.map(x => x.precio).filter(v => v > 0);
         const minP = precios.length ? Math.min(...precios) : 0;
         const hayOferta = items.some(x => x.enOferta);
-        const hayPromo = items.some(x => x.promo);
+        const hayPromo = items.some(x => etiquetaPromoTienda(x, fmt));
         return {
           ...repr,
           id: "fam:" + cel._famKey,
@@ -2736,20 +2846,21 @@ function Tienda() {
            precio: minP,
           precioAntes: null,
           enOferta: hayOferta,
-          promo: hayPromo ? repr.promo : null
+          promo: null,
+          _hayPromo: hayPromo
         };
       });
     }
     if (orden === "precio-asc") arr = [...arr].sort((a, b) => a.precio - b.precio);
     if (orden === "precio-desc") arr = [...arr].sort((a, b) => b.precio - a.precio);
-    if (orden === "nombre") arr = [...arr].sort((a, b) => a.nombre.localeCompare(b.nombre));
+    if (orden === "nombre" || orden === "relevancia") arr = [...arr].sort((a, b) => a.nombre.localeCompare(b.nombre));
     return arr;
-  }, [productos, cat, busqueda, orden, soloOfertas, famPortadas]);
+  }, [productos, cat, busqueda, orden, soloOfertas, famPortadas, indiceProductosTienda]);
 
   // Armado de secciones: Más pedidos + Ofertas arriba, luego agrupado por categoría
   const secciones = useMemo(() => {
     if (cat === "todos" && !soloOfertas && !busqueda) {
-      const ofertas = visibles.filter(p => p.promo || p.enOferta);
+      const ofertas = visibles.filter(p => p._hayPromo || etiquetaPromoTienda(p, fmt) || p.enOferta);
       const novedades = visibles.filter(p => p.esNovedad === true);
       const cats = [];
       visibles.forEach(p => {
@@ -2892,6 +3003,7 @@ function Tienda() {
   // Tarjeta de producto reutilizable
   const renderCard = p => {
     const enCarrito = carrito[p.id] || 0;
+    const promoTexto = etiquetaPromoTienda(p, fmtCompraTienda);
     return /*#__PURE__*/React.createElement("div", {
       key: p.id,
       "data-prod": true,
@@ -2929,7 +3041,7 @@ function Tienda() {
         color: "#fff",
         boxShadow: "0 2px 8px #00000055"
       }
-    }, "🔥 OFERTA", p.precioAntes && p.precioAntes > 0 ? ` −${Math.round((1 - p.precio / p.precioAntes) * 100)}%` : ""), !p.enOferta && p.promo && /*#__PURE__*/React.createElement("span", {
+    }, p._esFamilia ? "🔥 Variedades con oferta" : "🔥 OFERTA", p.precioAntes && p.precioAntes > 0 ? ` −${Math.round((1 - p.precio / p.precioAntes) * 100)}%` : ""), !p.enOferta && (p._hayPromo || promoTexto) && /*#__PURE__*/React.createElement("span", {
       className: "absolute top-2 left-2 text-[11px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1",
       style: {
         background: TEMA.oferta,
@@ -2986,34 +3098,36 @@ function Tienda() {
         fontFamily: "var(--f-txt)",
         color: "#fff"
       }
-    }, fmt(p.precio)), /*#__PURE__*/React.createElement("span", {
+    }, fmtCompraTienda(p.precio)), /*#__PURE__*/React.createElement("span", {
       className: "precio-num text-[11px] line-through",
       style: {
         color: "#ffffffcc"
       }
-    }, fmt(p.precioAntes)))) : /*#__PURE__*/React.createElement("div", {
+    }, fmtCompraTienda(p.precioAntes)))) : /*#__PURE__*/React.createElement("div", {
       className: "inline-block precio-num text-lg font-extrabold px-2.5 py-1 rounded-lg",
       style: {
         fontFamily: "var(--f-txt)",
         background: TEMA.gold,
         color: TEMA.bg
       }
-    }, fmt(p.precio)), p.unidadesBulto > 1 && /*#__PURE__*/React.createElement("div", {
+    }, fmtCompraTienda(precioMostradoUnidadTienda(p))), /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px] font-semibold mt-0.5", style: {color: TEMA.textoSuave}
+    }, etiquetaPrecioTienda(p)), !p._esFamilia && p.vendePor !== "peso" && p.unidadVenta !== "unidad" && p.unidadesBulto > 1 && /*#__PURE__*/React.createElement("div", {
       className: "precio-num text-[11px]",
       style: {
         color: TEMA.textoSuave
       }
-    }, "📦 ", p.unidadBulto || "caja", " x", p.unidadesBulto, ": ", fmt(cajaPrecio(p))), p.minCompra > 1 && /*#__PURE__*/React.createElement("div", {
+    }, "📦 ", p.unidadBulto || "caja", " de ", p.unidadesBulto, ": ", fmtCompraTienda(cajaPrecio(p))), !p._esFamilia && p.minCompra > 1 && /*#__PURE__*/React.createElement("div", {
       className: "text-[11px]",
       style: {
         color: TEMA.textoSuave
       }
-    }, "mínimo ", p.minCompra, " u."), p.promo && /*#__PURE__*/React.createElement("div", {
-      className: "precio-num text-[11px]",
+    }, "mínimo ", p.minCompra, " u."), promoTexto && /*#__PURE__*/React.createElement("div", {
+      className: "precio-num text-[11px] font-bold mt-1",
       style: {
         color: TEMA.ok
       }
-    }, fmt(p.promo.precio), " c/u", p.promo.cant ? ` llevando ${p.promo.cant}+` : ""), (() => {
+    }, promoTexto), (() => {
       const s = infoStock(p);
       return s ? /*#__PURE__*/React.createElement("div", {
         className: "text-[11px] font-bold mt-0.5",
@@ -3077,6 +3191,7 @@ function Tienda() {
 
   // Fila compacta (modo lista rápida para mayoristas): foto chica, nombre, precio y cantidad.
   const renderFila = p => {
+    const promoTexto = etiquetaPromoTienda(p, fmtCompraTienda);
     const enCarrito = carrito[p.id] || 0;
     return /*#__PURE__*/React.createElement("div", {
       key: p.id,
@@ -3125,7 +3240,7 @@ function Tienda() {
         color: "#fff"
       }
     }, temporadaInfo(p.temporada).emoji, " ", temporadaInfo(p.temporada).nombre), /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center gap-2"
+    className: "flex items-center flex-wrap gap-2"
     }, p.enOferta && p.precioAntes ? /*#__PURE__*/React.createElement("span", {
       className: "flex items-baseline gap-1.5"
     }, /*#__PURE__*/React.createElement("span", {
@@ -3134,23 +3249,23 @@ function Tienda() {
         color: TEMA.oferta
       },
       className: "text-sm font-extrabold"
-    }, fmt(p.precio)), /*#__PURE__*/React.createElement("span", {
+    }, fmtCompraTienda(p.precio)), /*#__PURE__*/React.createElement("span", {
       className: "text-[11px] line-through",
       style: {
         color: TEMA.textoSuave
       }
-    }, fmt(p.precioAntes))) : /*#__PURE__*/React.createElement("span", {
+    }, fmtCompraTienda(p.precioAntes))) : /*#__PURE__*/React.createElement("span", {
       style: {
         fontFamily: "var(--f-txt)",
         color: TEMA.gold
       },
       className: "text-sm font-extrabold"
-    }, fmt(p.precio)), p.unidadesBulto > 1 && !p._esFamilia && /*#__PURE__*/React.createElement("span", {
+    }, fmtCompraTienda(precioMostradoUnidadTienda(p))), /*#__PURE__*/React.createElement("span", {
       className: "text-[10px]",
       style: {
         color: TEMA.textoSuave
       }
-    }, "caja x", p.unidadesBulto), p._esFamilia && /*#__PURE__*/React.createElement("span", {
+    }, etiquetaPrecioTienda(p)), p._esFamilia && /*#__PURE__*/React.createElement("span", {
       className: "text-[10px]",
       style: {
         color: TEMA.textoSuave
@@ -3163,7 +3278,12 @@ function Tienda() {
           color: s.alerta ? TEMA.oferta : TEMA.textoSuave
         }
       }, s.txt) : null;
-    })())), p._esFamilia ? /*#__PURE__*/React.createElement("button", {
+    })()), !p._esFamilia && p.vendePor !== "peso" && p.unidadVenta !== "unidad" && p.unidadesBulto > 1 &&
+    React.createElement("div", {className: "text-[11px]", style: {color: TEMA.textoSuave}},
+      (p.unidadBulto || "caja") + " de " + p.unidadesBulto + ": " + fmtCompraTienda(cajaPrecio(p))),
+    promoTexto && React.createElement("div", {
+      className: "text-[11px] font-bold", style: {color: TEMA.ok}
+    }, promoTexto)), p._esFamilia ? /*#__PURE__*/React.createElement("button", {
       onClick: () => setDetalle(p),
       className: "shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold",
       style: {
@@ -3387,7 +3507,8 @@ function Tienda() {
     // Precio unitario individual: normal (o de oferta), o promo si se alcanza la cantidad.
     // La oferta tiene prioridad sobre la promo: no se acumulan.
     let unitInd = p.precio;
-    const aplicaPromo = !!(p.promo && p.promo.precio > 0 && !p.enOferta && (!p.promo.cant || unidadesReales >= p.promo.cant));
+    const aplicaPromo = !!(p.promo && p.promo.precio > 0 && !p.enOferta && !(modo === "caja" && p.precioCaja > 0) &&
+      (!p.promo.cant || unidadesReales >= p.promo.cant));
     if (aplicaPromo) unitInd = p.promo.precio;
     let precioVenta = unitInd * mult;
     let precioUnitFinal = unitInd;
@@ -3506,15 +3627,29 @@ function Tienda() {
   };
   // Horario de corte: "HH:MM". Si ya pasó, se lo avisamos antes de que confirme.
   const corteTxt = String(cfg.horarioCorte || "").trim();
-  const cortePasó = useMemo(() => {
-    const m = /^(\d{1,2}):(\d{2})$/.exec(corteTxt);
-    if (!m) return false;
-    const h = Number(m[1]),
-      mi = Number(m[2]);
-    if (h > 23 || mi > 59) return false;
-    const d = new Date();
-    return d.getHours() * 60 + d.getMinutes() > h * 60 + mi;
-  }, [corteTxt, carritoAbierto]);
+  const entregaEstimada = fechaEstimadaEntregaTienda(zonaSel, corteTxt);
+  const envioPorCalcular = hayZonas && !zonaSel;
+  const resumenEntrega = permiteCambiar => React.createElement("section", {
+    className: "rounded-xl px-3 py-2.5 space-y-2 text-sm",
+    style: {border: "1px solid " + TEMA.borde, background: TEMA.bgSoft},
+    "aria-label": "Estimación de envío"
+  },
+  React.createElement("div", {className: "font-extrabold", style: {color: TEMA.gold}}, "Envío y entrega"),
+  permiteCambiar && hayZonas && React.createElement("select", {
+    "aria-label": "Zona para calcular envío", value: cliZona, onChange: e => setCliZona(e.target.value),
+    className: "w-full min-w-0 rounded-lg px-2 py-2",
+    style: {background: TEMA.bgCard, color: TEMA.texto, border: "1px solid " + TEMA.borde}
+  }, React.createElement("option", {value: ""}, "Elegí tu zona de envío"),
+  zonas.map((z, i) => React.createElement("option", {key: i, value: z.nombre}, z.nombre))),
+  React.createElement("div", {className: "flex justify-between gap-3"},
+    React.createElement("span", null, "Envío"), React.createElement("strong", null, envioPorCalcular ? "Elegí tu zona" : envio > 0 ? fmtCompraTienda(envio) : "Sin cargo")),
+  React.createElement("div", {className: "flex justify-between gap-3"},
+    React.createElement("span", null, entregaEstimada ? "Entrega estimada" : "Entrega"),
+    React.createElement("strong", {className: "text-right"}, entregaEstimada || "A coordinar")),
+  minimoAplica > 0 && React.createElement("p", {className: "text-xs", style: {color: cumpleMinimo ? TEMA.ok : TEMA.oferta}},
+    (envioPorCalcular ? "Mínimo general " : "Mínimo ") + fmtCompraTienda(minimoAplica) +
+    (cumpleMinimo ? " · alcanzado" : " · te faltan " + fmtCompraTienda(faltaMinimo))));
+  const cortePasó = corteTxt && relojEntregaTienda(corteTxt, new Date()).antesDelCorte === false;
   const textoCorte = String(cfg.textoCorte || "").trim();
   // Instagram/Facebook: aceptamos el usuario suelto o el link completo.
   const linkRed = (v, base) => {
@@ -4186,7 +4321,8 @@ function Tienda() {
       nombre: "",
       costo: 0,
       gratisDesde: 0,
-      minimo: 0
+      minimo: 0,
+      diasEntrega: []
     }]
   }));
   const delZona = i => setEditCfg(c => ({
@@ -4631,11 +4767,11 @@ function Tienda() {
     }, segEstado.error ? "No se pudo consultar. Revisá tu conexión." : "No encontramos un pedido con ese código. Verificá que esté bien escrito."))));
   })(), detalle && (() => {
     const p = detalle;
-    const modo = modos[p.id] || "unidad";
+    const modo = modos[p.id] || (_esSoloCaja(p) ? "caja" : "unidad");
     const tieneCaja = p.unidadesBulto > 1;
     const _puedeUnidad = p.unidadVenta !== "caja" && p.unidadVenta !== "bulto";
     const _puedeCaja = p.unidadVenta !== "unidad" && p.unidadesBulto > 1;
-    const precioSel = modo === "caja" ? cajaPrecio(p) : p.precio;
+    const promoTexto = etiquetaPromoTienda(p, fmtCompraTienda);
     const enCarrito = carrito[p.id] || 0;
     const _esP = esPeso(p);
     const pesoActual = pesos[p.id] || 0;
@@ -4916,7 +5052,7 @@ function Tienda() {
       style: {
         fontFamily: "var(--f-txt)"
       }
-    }, fmt(p.precio))), _puedeCaja && /*#__PURE__*/React.createElement("button", {
+    }, fmtCompraTienda(p.precio))), _puedeCaja && /*#__PURE__*/React.createElement("button", {
       onClick: () => elegirModo(p, "caja"),
       className: "flex-1 rounded-xl p-2.5 text-center transition active:scale-95",
       style: {
@@ -4931,17 +5067,17 @@ function Tienda() {
       style: {
         fontFamily: "var(--f-txt)"
       }
-    }, fmt(cajaPrecio(p))))), modo === "caja" ? /*#__PURE__*/React.createElement("div", {
+    }, fmtCompraTienda(cajaPrecio(p))))), modo === "caja" ? /*#__PURE__*/React.createElement("div", {
       className: "text-[11px] mb-3",
       style: {
         color: TEMA.textoSuave
       }
-    }, umNomCap(p), " de ", p.unidadesBulto, " u. · cada unidad ", fmt(Math.round(cajaPrecio(p) / (p.unidadesBulto || 1)))) : _puedeCaja ? /*#__PURE__*/React.createElement("div", {
+    }, umNomCap(p), " de ", p.unidadesBulto, " u. · cada unidad ", fmtCompraTienda(cajaPrecio(p) / (p.unidadesBulto || 1))) : _puedeCaja ? /*#__PURE__*/React.createElement("div", {
       className: "text-[11px] mb-3",
       style: {
         color: TEMA.textoSuave
       }
-    }, "El ", umNom(p), " cerrado de ", p.unidadesBulto, " u. sale ", fmt(cajaPrecio(p))) : p.minCompra > 1 ? /*#__PURE__*/React.createElement("div", {
+    }, "El ", umNom(p), " cerrado de ", p.unidadesBulto, " u. sale ", fmtCompraTienda(cajaPrecio(p))) : p.minCompra > 1 ? /*#__PURE__*/React.createElement("div", {
       className: "text-[11px] mb-3",
       style: {
         color: TEMA.textoSuave
@@ -4954,19 +5090,19 @@ function Tienda() {
         fontFamily: "var(--f-txt)",
         color: TEMA.gold
       }
-    }, fmt(p.precio)), p.minCompra > 1 ? /*#__PURE__*/React.createElement("div", {
+    }, fmtCompraTienda(precioMostradoUnidadTienda(p)), " · ", etiquetaPrecioTienda(p)), p.minCompra > 1 ? /*#__PURE__*/React.createElement("div", {
       className: "text-xs mb-3",
       style: {
         color: TEMA.textoSuave
       }
     }, "mínimo ", p.minCompra, " u.") : /*#__PURE__*/React.createElement("div", {
       className: "mb-3"
-    })), p.promo && /*#__PURE__*/React.createElement("div", {
+    })), promoTexto && /*#__PURE__*/React.createElement("div", {
       className: "text-xs mb-3",
       style: {
         color: TEMA.ok
       }
-    }, "Promo: ", fmt(p.promo.precio), " c/u", p.promo.cant ? ` llevando ${p.promo.cant}+` : ""), enCarrito === 0 ? /*#__PURE__*/React.createElement("button", {
+    }, promoTexto), enCarrito === 0 ? /*#__PURE__*/React.createElement("button", {
       onClick: e => agregarConVuelo(p, e),
       className: "w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-1 transition active:scale-95",
       style: {
@@ -5384,7 +5520,8 @@ function Tienda() {
       color: TEMA.textoSuave
     }
   }), /*#__PURE__*/React.createElement("select", {
-    value: orden,
+    value: !busqueda.trim() && orden === "relevancia" ? "nombre" : orden,
+    "aria-label": "Orden de productos",
     onChange: e => setOrden(e.target.value),
     className: "text-sm rounded-lg px-2 py-1.5 outline-none",
     style: {
@@ -5392,7 +5529,7 @@ function Tienda() {
       border: `1px solid ${TEMA.borde}`,
       color: TEMA.texto
     }
-  }, /*#__PURE__*/React.createElement("option", {
+  }, !!busqueda.trim() && /*#__PURE__*/React.createElement("option", {
     value: "relevancia"
   }, "Relevancia"), /*#__PURE__*/React.createElement("option", {
     value: "precio-asc"
@@ -5653,7 +5790,7 @@ function Tienda() {
       color: TEMA.textoSuave,
       opacity: .5
     }
-  }, "v2026.09.15-novedades1"), /*#__PURE__*/React.createElement("div", {
+  }, "v2026.11.26-catalogo1"), /*#__PURE__*/React.createElement("div", {
     className: "h-24 md:hidden"
   })), carritoAbierto && paso === "exito" && /*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 z-50 overflow-hidden flex flex-col items-center justify-center px-6",
@@ -5981,16 +6118,9 @@ function Tienda() {
       width: `${barPct}%`,
       background: barColor
     }
-  }))), envio > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "text-xs space-y-0.5",
-    style: {
-      color: TEMA.textoSuave
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "flex justify-between"
-  }, /*#__PURE__*/React.createElement("span", null, "Subtotal"), /*#__PURE__*/React.createElement("span", null, fmt(subtotal))), /*#__PURE__*/React.createElement("div", {
-    className: "flex justify-between"
-  }, /*#__PURE__*/React.createElement("span", null, "Envío"), /*#__PURE__*/React.createElement("span", null, fmt(envio)))), cuponAplicado ? /*#__PURE__*/React.createElement("div", {
+  }))), React.createElement("div", {
+    className: "flex justify-between text-xs", style: {color: TEMA.textoSuave}
+  }, React.createElement("span", null, "Subtotal de productos"), React.createElement("span", null, fmtCompraTienda(subtotal))), cuponAplicado ? /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between rounded-lg px-3 py-2",
     style: {
       background: TEMA.bgSoft,
@@ -6051,7 +6181,7 @@ function Tienda() {
     style: {
       color: TEMA.oferta
     }
-  }, cuponError)), descuentoCupon > 0 && /*#__PURE__*/React.createElement("div", {
+  }, cuponError)), resumenEntrega(true), descuentoCupon > 0 && /*#__PURE__*/React.createElement("div", {
     className: "flex justify-between text-sm",
     style: {
       color: TEMA.ok
@@ -6062,13 +6192,13 @@ function Tienda() {
     style: {
       color: TEMA.textoSuave
     }
-  }, "Total"), /*#__PURE__*/React.createElement("span", {
+  }, envioPorCalcular ? "Total sin envío" : "Total"), /*#__PURE__*/React.createElement("span", {
     style: {
       fontFamily: "var(--f-txt)",
       color: TEMA.gold
     },
     className: "text-2xl font-extrabold"
-  }, fmt(totalFinal))), /*#__PURE__*/React.createElement("div", {
+  }, fmtCompraTienda(totalFinal))), /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2"
   }, /*#__PURE__*/React.createElement("button", {
     onClick: vaciar,
@@ -6101,7 +6231,7 @@ function Tienda() {
   }, zonas.map((z, i) => {
     const sel = z.nombre === cliZona;
     const costoZ = Number(z.costo) || 0;
-    const gratisZ = Number(z.gratisDesde) || 0;
+    const gratisZ = Number(z.gratisDesde) > 0 ? Number(z.gratisDesde) : envioGratisDesde;
     const minZ = Number(z.minimo) || 0;
     const gratisYa = gratisZ > 0 && subtotal >= gratisZ;
     const detalle = [];
@@ -6146,7 +6276,7 @@ function Tienda() {
     style: {
       color: TEMA.textoSuave
     }
-  }, "Elegí tu zona y el costo de envío se suma al total.")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, "Elegí tu zona y el costo de envío se suma al total.")), resumenEntrega(false), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "text-xs font-bold mb-2",
     style: {
       color: TEMA.gold
@@ -6384,7 +6514,7 @@ function Tienda() {
     style: {
       color: TEMA.gold
     }
-  }), /*#__PURE__*/React.createElement("span", null, cortePasó ? textoCorte || `Por hoy ya cerramos los pedidos de las ${corteTxt}. El tuyo lo preparamos en el próximo reparto.` : `Pedidos hasta las ${corteTxt} entran en el reparto de hoy.`)), condiciones && /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, cortePasó ? textoCorte || `Pasó el horario de corte de las ${corteTxt}. La entrega depende de tu zona.` : `Horario de corte: ${corteTxt}. Revisá la estimación de tu zona.`)), condiciones && /*#__PURE__*/React.createElement("div", {
     className: "rounded-xl px-3 py-2.5",
     style: {
       background: TEMA.bgCard,
@@ -7091,7 +7221,7 @@ function Tienda() {
     style: {
       color: TEMA.textoSuave
     }
-  }, "Cargá tus zonas con el costo de cada una. Al confirmar el pedido, el cliente elige la suya y ese costo se le suma al total.", /*#__PURE__*/React.createElement("b", null, " Si no cargás ninguna, se usa el \"costo de envío\" de arriba, como siempre.")), (editCfg.zonasEnvio || []).length === 0 && /*#__PURE__*/React.createElement("div", {
+  }, "Configurá el costo y los días habituales por zona. El cliente puede calcular el envío desde el carrito.", /*#__PURE__*/React.createElement("b", null, " Si no cargás zonas, se usa el \"costo de envío\" de arriba.")), (editCfg.zonasEnvio || []).length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "rounded-lg px-3 py-2 text-[11px]",
     style: {
       background: TEMA.bgCard,
@@ -7165,7 +7295,20 @@ function Tienda() {
     style: {
       color: TEMA.textoSuave
     }
-  }, "0 en \"gratis desde\" y en \"mínimo\" = usa los generales de arriba.")))))), /*#__PURE__*/React.createElement("div", {
+  }, "0 en \"gratis desde\" y en \"mínimo\" = usa los generales de arriba."),
+  React.createElement("div", {className: "mt-2"},
+    React.createElement("div", {className: "text-xs font-bold mb-1"}, "Días habituales de entrega"),
+    React.createElement("div", {className: "flex flex-wrap gap-1", role: "group", "aria-label": "Días de entrega · " + (z.nombre || "zona " + (i + 1))}, DIAS_ENTREGA_TIENDA.map((dia, d) => {
+      const dias = Array.isArray(z.diasEntrega) ? z.diasEntrega : [];
+      const seleccionado = dias.includes(d);
+      return React.createElement("button", {key: d, type: "button", "aria-pressed": seleccionado,
+        onClick: () => setZona(i, "diasEntrega", seleccionado ? dias.filter(x => x !== d) : [...dias, d]),
+        className: "rounded-lg px-2 py-1.5 text-xs",
+        style: {background: seleccionado ? TEMA.gold : TEMA.bgSoft, color: seleccionado ? TEMA.bg : TEMA.texto,
+          border: "1px solid " + TEMA.borde}}, dia);
+    })),
+    React.createElement("p", {className: "text-[11px] mt-1", style: {color: TEMA.textoSuave}},
+      "Sin días: «A coordinar». El día actual solo se estima antes del horario de corte."))))))), /*#__PURE__*/React.createElement("div", {
     className: "pt-3 mt-1",
     style: {
       borderTop: `1px solid ${TEMA.borde}`
