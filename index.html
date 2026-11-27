@@ -568,7 +568,7 @@ const CFG_DEFAULT = {
      TODO esto arranca vacío a propósito: una distribuidora que ya está
      andando no ve ni un cambio hasta que ella misma lo carga. */
   zonasEnvio: [],
-  // [{ nombre, costo, gratisDesde, minimo, diasEntrega }] — vacío = tarifa única de arriba
+  // [{ nombre, costo, gratisDesde, minimo, diasEntrega, reglasEntrega }] — vacío = tarifa única de arriba
   formasPago: [],
   // [{ t: "Efectivo", s: "Al recibir el pedido" }]
   alias: "",
@@ -809,19 +809,6 @@ async function sbGet(table, params) {
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
-async function sbUpsert(table, row, onConflict) {
-  const r = await fetch(`${SB_URL}/rest/v1/${table}?on_conflict=${onConflict}`, {
-    method: "POST",
-    headers: {
-      ...SB_HDR,
-      "Content-Type": "application/json",
-      "Prefer": "resolution=merge-duplicates,return=representation"
-    },
-    body: JSON.stringify(row)
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
 async function resolverEmpresa(codigo) {
   // Intento con las columnas de pago online; si no existen (falta el SQL), reintento sin ellas.
   let emps = null;
@@ -960,92 +947,6 @@ function comprimirImagen(file, maxLado, topeKB) {
 }
 // Peso aproximado de una imagen guardada, para mostrárselo al admin.
 const pesoKB = s => !s ? 0 : Math.round(String(s).length / 1024 * 10) / 10;
-async function guardarConfig(empId, config) {
-  return sbUpsert("tienda_config", {
-    empresa_id: empId,
-    config,
-    updated_at: new Date().toISOString()
-  }, "empresa_id");
-}
-async function subirImagenTienda(dataURL, empId, base) {
-  try {
-    if (!dataURL || dataURL.indexOf("data:") !== 0) return dataURL;
-    const arr = dataURL.split(","),
-      mime = (arr[0].match(/:(.*?);/) || [])[1] || "image/jpeg";
-    const bstr = atob(arr[1]);
-    let n = bstr.length;
-    const u8 = new Uint8Array(n);
-    while (n--) u8[n] = bstr.charCodeAt(n);
-    const blob = new Blob([u8], {
-      type: mime
-    });
-    const slug = (base || "banner").toString().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 30) || "banner";
-    const path = (empId || "x") + "/" + slug + "_" + Date.now() + "_" + Math.floor(Math.random() * 9999) + ".jpg";
-    const resp = await fetch(SB_URL + "/storage/v1/object/productos/" + path, {
-      method: "POST",
-      headers: {
-        apikey: SB_KEY,
-        Authorization: "Bearer " + SB_KEY,
-        "Content-Type": blob.type || "image/jpeg",
-        "x-upsert": "true"
-      },
-      body: blob
-    });
-    if (!resp.ok) throw new Error("storage " + resp.status);
-    return SB_URL + "/storage/v1/object/public/productos/" + path;
-  } catch (e) {
-    console.warn("subir imagen tienda:", e);
-    return dataURL;
-  }
-}
-async function validarAdmin(empId, uid, pass, empCodigo) {
-  // Validación ÚNICAMENTE con la función segura del servidor (verificar_login).
-  // No se lee ni compara la columna pass en texto plano (las contraseñas están hasheadas).
-  // Devuelve: { ok:true, user } | { ok:false, motivo:"credenciales"|"empresa"|"red" }
-  if (!empCodigo) return {
-    ok: false,
-    motivo: "empresa"
-  };
-  try {
-    const r = await fetch(`${SB_URL}/rest/v1/rpc/verificar_login`, {
-      method: "POST",
-      headers: {
-        ...SB_HDR,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        p_emp_codigo: empCodigo,
-        p_uid: uid,
-        p_pass: pass
-      })
-    });
-    if (!r.ok) return {
-      ok: false,
-      motivo: "red"
-    };
-    const u = await r.json();
-    // verificar_login devuelve el usuario si las credenciales son válidas, o null si no.
-    if (u && u.id) {
-      if (u.role === "admin") return {
-        ok: true,
-        user: u
-      };
-      return {
-        ok: false,
-        motivo: "credenciales"
-      }; // existe pero no es admin
-    }
-    return {
-      ok: false,
-      motivo: "credenciales"
-    };
-  } catch (e) {
-    return {
-      ok: false,
-      motivo: "red"
-    };
-  }
-}
 function claveListaTienda(key) {
   const k = String(key || "cli").trim();
   if (["clientes", "precio normal", "cli"].includes(k.toLowerCase())) return "cli";
@@ -1149,11 +1050,10 @@ async function identificarClienteTienda(empresaId, uid) {
 }
 function rutaTienda(url) {
   const u = new URL(url);
-  const admin = window.parent === window && /\/admin\/?$/i.test(u.pathname);
   const codigo = u.searchParams.get("emp") || u.searchParams.get("e") || "";
-  if (admin) u.pathname = u.pathname.replace(/admin\/?$/i, "").replace(/(\.html)\/$/i, "$1");
+  if (/\/admin\/?$/i.test(u.pathname)) u.pathname = "/";
   u.hash = "";
-  return { admin, codigo, publica: u.href };
+  return { codigo, publica: u.href };
 }
 const ORIGENES_PANEL_TIENDA = new Set(["https://pagina-clientes-pedidos.vercel.app"]);
 function editorEmbebidoTienda() {
@@ -1289,25 +1189,118 @@ function etiquetaPromoTienda(p, fmt) {
     ? detalle + " · no aplica al pack de precio fijo" : detalle;
 }
 const DIAS_ENTREGA_TIENDA = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+const DIAS_ENTREGA_ORDEN_TIENDA = [1, 2, 3, 4, 5, 6, 0]; // Semana de lunes a domingo.
 const HORA_ENVIO_TIENDA = new Intl.DateTimeFormat("en-GB", {timeZone: "America/Argentina/Buenos_Aires",
   year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
+const FECHA_ENVIO_TIENDA = new Intl.DateTimeFormat("es-AR", {timeZone: "UTC", weekday: "long", day: "numeric", month: "long"});
 function relojEntregaTienda(corte, ahora) {
   const partes = Object.fromEntries(HORA_ENVIO_TIENDA.formatToParts(ahora).map(p => [p.type, Number(p.value)]));
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(corte || "").trim());
   return {...partes, antesDelCorte: m && +m[1] < 24 && +m[2] < 60
     ? partes.hour * 60 + partes.minute < +m[1] * 60 + +m[2] : null};
 }
-function fechaEstimadaEntregaTienda(zona, corte, ahora = new Date()) {
-  const dias = new Set(Array.isArray(zona?.diasEntrega) ? zona.diasEntrega.filter(d => Number.isInteger(d) && d >= 0 && d <= 6) : []);
-  if (!dias.size) return "";
-  const partes = relojEntregaTienda(corte, ahora);
-  const fecha = new Date(Date.UTC(partes.year, partes.month - 1, partes.day));
-  if (!partes.antesDelCorte) fecha.setUTCDate(fecha.getUTCDate() + 1);
-  for (let i = 0; i < 7; i++, fecha.setUTCDate(fecha.getUTCDate() + 1)) {
-    if (dias.has(fecha.getUTCDay())) return new Intl.DateTimeFormat("es-AR", {timeZone: "UTC",
-      weekday: "long", day: "numeric", month: "long"}).format(fecha);
+function reglasEntregaTienda(zona) {
+  return Array.isArray(zona?.reglasEntrega) ? zona.reglasEntrega : [];
+}
+function errorReglasEntregaTienda(reglas) {
+  if (reglas.length > 7) return "Podés cargar hasta siete reglas por zona.";
+  const pedidos = new Set();
+  for (const [i, regla] of reglas.entries()) {
+    const prefijo = "Regla " + (i + 1) + ": ";
+    if (!Array.isArray(regla?.diasPedido) || !regla.diasPedido.length || !regla.diasPedido.every(d => DIAS_ENTREGA_ORDEN_TIENDA.includes(d)))
+      return prefijo + "elegí al menos un día de pedido.";
+    if (![0, 1, 2].includes(regla.semana) || !DIAS_ENTREGA_ORDEN_TIENDA.includes(regla.desde))
+      return prefijo + "elegí el día de entrega y la semana.";
+    const inicio = DIAS_ENTREGA_ORDEN_TIENDA.indexOf(regla.desde);
+    if (regla.hasta != null && DIAS_ENTREGA_ORDEN_TIENDA.indexOf(regla.hasta) < inicio)
+      return prefijo + "el último día de entrega no puede ser anterior al primero.";
+    for (const d of regla.diasPedido) {
+      if (pedidos.has(d)) return prefijo + DIAS_ENTREGA_TIENDA[d] + " ya está en una regla.";
+      if (regla.semana === 0 && DIAS_ENTREGA_ORDEN_TIENDA.indexOf(d) > inicio)
+        return prefijo + "la entrega no puede empezar antes de un día de pedido.";
+      pedidos.add(d);
+    }
   }
   return "";
+}
+function fechaEstimadaEntregaTienda(zona, corte, ahora = new Date()) {
+  const reglas = reglasEntregaTienda(zona);
+  const dias = new Set(Array.isArray(zona?.diasEntrega) ? zona.diasEntrega.filter(d => Number.isInteger(d) && d >= 0 && d <= 6) : []);
+  if (!reglas.length && !dias.size) return "";
+  const partes = relojEntregaTienda(corte, ahora);
+  const fecha = new Date(Date.UTC(partes.year, partes.month - 1, partes.day));
+  if (reglas.length) {
+    if (errorReglasEntregaTienda(reglas)) return "";
+    // Con reglas, el corte (si existe) pasa el pedido al siguiente día del calendario.
+    if (partes.antesDelCorte === false) fecha.setUTCDate(fecha.getUTCDate() + 1);
+    const diaPedido = fecha.getUTCDay();
+    const regla = reglas.find(r => r.diasPedido.includes(diaPedido));
+    if (!regla) return ""; // Sin regla aplicable: no prometer fecha.
+    const lunes = fecha.getUTCDate() - DIAS_ENTREGA_ORDEN_TIENDA.indexOf(diaPedido) + 7 * regla.semana;
+    const fin = new Date(fecha);
+    fecha.setUTCDate(lunes + DIAS_ENTREGA_ORDEN_TIENDA.indexOf(regla.desde));
+    fin.setUTCDate(lunes + DIAS_ENTREGA_ORDEN_TIENDA.indexOf(regla.hasta ?? regla.desde));
+    if (fecha.getTime() === fin.getTime()) return FECHA_ENVIO_TIENDA.format(fecha);
+    return FECHA_ENVIO_TIENDA.formatRange?.(fecha, fin) || "Entre el " + FECHA_ENVIO_TIENDA.format(fecha) + " y el " + FECHA_ENVIO_TIENDA.format(fin);
+  }
+  if (!partes.antesDelCorte) fecha.setUTCDate(fecha.getUTCDate() + 1);
+  for (let i = 0; i < 7; i++, fecha.setUTCDate(fecha.getUTCDate() + 1)) {
+    if (dias.has(fecha.getUTCDay())) return FECHA_ENVIO_TIENDA.format(fecha);
+  }
+  return "";
+}
+function ReglasEntregaEditorTienda({zona, indice, onCambio, tema, inputCls, inputStyle}) {
+  const h = React.createElement;
+  const reglas = reglasEntregaTienda(zona);
+  const error = errorReglasEntregaTienda(reglas);
+  const editar = (i, campo, valor) => onCambio(reglas.map((r, j) => j === i ? {...r, [campo]: valor} : r));
+  const diasOpciones = (desde = 0) => DIAS_ENTREGA_ORDEN_TIENDA.slice(desde).map(d =>
+    h("option", {key: d, value: d}, DIAS_ENTREGA_TIENDA[d]));
+  const zoneLabel = zona.nombre || "zona " + (indice + 1);
+  const boton = {background: tema.bgSoft, color: tema.texto, border: "1px solid " + tema.borde};
+  const labelStyle = {color: tema.textoSuave};
+  return h("details", {className: "mt-3 pt-2", style: {borderTop: "1px solid " + tema.borde}},
+    h("summary", {className: "cursor-pointer text-xs font-bold py-1.5"}, "Reglas por día de pedido", reglas.length ? " · " + reglas.length : ""),
+    h("p", {className: "text-[11px] leading-relaxed mb-2", style: labelStyle},
+      "Definí qué día o rango corresponde según cuándo compran. Con reglas, los días sin asignar quedan «A coordinar». Si hay horario de corte, desde esa hora el pedido cuenta para el día siguiente (hora argentina)."),
+    reglas.map((r, i) => {
+      const regla = r || {};
+      const pedidos = Array.isArray(regla.diasPedido) ? regla.diasPedido : [];
+      const ocupados = new Set(reglas.filter((_, j) => i !== j).flatMap(otra => Array.isArray(otra?.diasPedido) ? otra.diasPedido : []));
+      const comienzo = Math.max(0, DIAS_ENTREGA_ORDEN_TIENDA.indexOf(regla.desde));
+      return h("fieldset", {key: i, className: "min-w-0 p-2 mb-2 rounded-lg", style: {border: "1px solid " + tema.borde}},
+        h("legend", {className: "px-1 text-xs font-bold"}, "Regla " + (i + 1)),
+        h("div", {className: "flex flex-wrap items-center justify-between gap-1 mb-1"},
+          h("span", {className: "text-xs font-bold"}, "Si el pedido entra"),
+          h("button", {type: "button", className: "px-2 py-1 text-xs rounded-lg", style: boton,
+            "aria-label": "Quitar regla " + (i + 1), onClick: () => onCambio(reglas.filter((_, j) => j !== i))}, "Quitar")),
+        h("div", {role: "group", "aria-label": "Días de pedido · " + zoneLabel + " · regla " + (i + 1), className: "flex flex-wrap gap-1"},
+          DIAS_ENTREGA_ORDEN_TIENDA.map(d => {
+            const activo = pedidos.includes(d), inhabilitado = !activo && ocupados.has(d);
+            return h("button", {key:d, type:"button", "aria-pressed": activo, disabled:inhabilitado,
+              title:inhabilitado ? "Ya está en otra regla" : undefined, className:"rounded-lg px-2 py-1.5 text-xs",
+              style:{...boton, background: activo ? tema.gold : tema.bgSoft, color: activo ? tema.bg : tema.texto, opacity:inhabilitado ? .5 : 1},
+              onClick:()=>editar(i, "diasPedido", activo ? pedidos.filter(x => x !== d) : [...pedidos, d])}, DIAS_ENTREGA_TIENDA[d]);
+          })),
+        h("div", {className: "grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2"},
+          h("label", {className:"text-xs", style:labelStyle}, "Semana de entrega",
+            h("select", {className:inputCls, style:inputStyle, value:regla.semana ?? 0, onChange:e=>editar(i,"semana",Number(e.target.value))},
+              h("option",{value:0},"Esa misma semana"),h("option",{value:1},"La semana siguiente"),h("option",{value:2},"Dos semanas después"))),
+          h("label", {className:"text-xs", style:labelStyle}, "Primer día de entrega",
+            h("select", {className:inputCls, style:inputStyle, value:regla.desde ?? "", onChange:e=>{
+              const desde = e.target.value === "" ? null : Number(e.target.value);
+              const hasta = desde !== null && DIAS_ENTREGA_ORDEN_TIENDA.indexOf(regla.hasta) > DIAS_ENTREGA_ORDEN_TIENDA.indexOf(desde) ? regla.hasta : null;
+              onCambio(reglas.map((valor, j) => j === i ? {...valor, desde, hasta} : valor));
+            }}, h("option",{value:""},"Elegí un día"),diasOpciones())),
+          h("label", {className:"text-xs", style:labelStyle}, "Último día (opcional)",
+            h("select", {className:inputCls, style:inputStyle, value:regla.hasta ?? "",
+              disabled:!DIAS_ENTREGA_ORDEN_TIENDA.includes(regla.desde),
+              onChange:e=>editar(i,"hasta",e.target.value === "" ? null : Number(e.target.value))},
+              h("option",{value:""},"Un solo día"),diasOpciones(comienzo + 1)))));
+    }),
+    error && h("p",{className:"text-xs mb-2",role:"status",style:{color:tema.oferta}},error),
+    reglas.length < 7 && h("button",{type:"button",className:"px-2.5 py-1.5 rounded-lg text-xs font-bold",style:boton,
+      onClick:()=>onCambio([...reglas,{diasPedido:[],semana:0,desde:null,hasta:null}])},"+ Agregar regla"));
 }
 function promoPrecioUnitarioSeguroTienda(p, precioCrudo, precioNormal) {
   const raw = Number(precioCrudo || 0);
@@ -2350,6 +2343,14 @@ function Tienda() {
   const [modos, setModos] = useState({}); // { [id]: "unidad" | "caja" }
   const [pesos, setPesos] = useState({}); // { [id]: gramos } para productos por peso
   const [carritoAbierto, setCarritoAbierto] = useState(false);
+  const [, refrescarHoraEntrega] = useState(0);
+  useEffect(() => {
+    if (!carritoAbierto) return;
+    const refrescar = () => refrescarHoraEntrega(n => n + 1);
+    const timer = setInterval(refrescar, 30000);
+    document.addEventListener("visibilitychange", refrescar);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", refrescar); };
+  }, [carritoAbierto]);
   const [paso, setPaso] = useState("carrito"); // carrito | revisar | exito
   const [cliNom, setCliNom] = useState("");
   const [cliTel, setCliTel] = useState("");
@@ -2390,13 +2391,7 @@ function Tienda() {
   const enlaceEditorPanel = useRef(null);
   const guardadoEditorPanel = useRef(null);
   const [inicioEditorPanel, setInicioEditorPanel] = useState(null);
-  const [loginOpen, setLoginOpen] = useState(false);
-  const [adminOk, setAdminOk] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
-  const [loginUid, setLoginUid] = useState("");
-  const [loginPass, setLoginPass] = useState("");
-  const [loginErr, setLoginErr] = useState("");
-  const [loginCargando, setLoginCargando] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const cargarEnvioCliente = envio => {
     const d = envio || {};
@@ -2466,7 +2461,7 @@ function Tienda() {
     if (invitacionCliente?.limpia) window.history.replaceState(null, "", invitacionCliente.limpia);
   }, []);
   useEffect(() => {
-    if (!empresa || cargando || enPanelEditor || rutaTienda(window.location.href).admin) return;
+    if (!empresa || cargando || enPanelEditor) return;
     const restaurar = () => {
       if (invitacionPendiente.current) return;
       const uid = leerIdClienteTienda(empresa.id);
@@ -2527,16 +2522,6 @@ function Tienda() {
     setCfgBase(base);setEditCfg(cfgParaEditar(base));setVistaPrevia(false);setEditorOpen(true);
     window.parent.postMessage({canal:"tienda-editor-v1",tipo:"activo",id:inicioEditorPanel.id},inicioEditorPanel.origen);
   }, [empresa, cargando, inicioEditorPanel]);
-  useEffect(() => {
-    if (enPanelEditor || !empresa || cargando) return;
-    const abrirRuta = () => {
-      if (rutaTienda(window.location.href).admin) abrirAdmin();
-      else { setLoginOpen(false); setEditorOpen(false); setVistaPrevia(false); setAdminOk(false); delete SB_HDR["x-empresa-token"]; }
-    };
-    abrirRuta();
-    window.addEventListener("popstate", abrirRuta);
-    return () => window.removeEventListener("popstate", abrirRuta);
-  }, [empresa, cargando, enPanelEditor]);
   useEffect(() => {
     (async () => {
       try {
@@ -2683,7 +2668,7 @@ function Tienda() {
 
   // Bloquear scroll del fondo cuando hay un panel abierto (evita que se mueva todo en iOS)
   useEffect(() => {
-    const abierto = carritoAbierto || !!detalle || loginOpen || editorOpen || clienteOpen;
+    const abierto = carritoAbierto || !!detalle || editorOpen || clienteOpen;
     if (!abierto) return;
     const scrollY = window.scrollY;
     const b = document.body;
@@ -2700,7 +2685,7 @@ function Tienda() {
       b.style.width = "";
       window.scrollTo(0, scrollY);
     };
-  }, [carritoAbierto, detalle, loginOpen, editorOpen, clienteOpen]);
+  }, [carritoAbierto, detalle, editorOpen, clienteOpen]);
   const scrollArriba = () => window.scrollTo({
     top: 0,
     behavior: "smooth"
@@ -3667,7 +3652,9 @@ function Tienda() {
   };
   // Horario de corte: "HH:MM". Si ya pasó, se lo avisamos antes de que confirme.
   const corteTxt = String(cfg.horarioCorte || "").trim();
-  const entregaEstimada = fechaEstimadaEntregaTienda(zonaSel, corteTxt);
+  const ahoraEntrega = new Date();
+  const entregaEstimada = fechaEstimadaEntregaTienda(zonaSel, corteTxt, ahoraEntrega);
+  const algunaZonaConReglas = zonas.some(z => reglasEntregaTienda(z).length > 0);
   const envioPorCalcular = hayZonas && !zonaSel;
   const resumenEntrega = permiteCambiar => React.createElement("section", {
     className: "rounded-xl px-3 py-2.5 space-y-2 text-sm",
@@ -3689,7 +3676,7 @@ function Tienda() {
   minimoAplica > 0 && React.createElement("p", {className: "text-xs", style: {color: cumpleMinimo ? TEMA.ok : TEMA.oferta}},
     (envioPorCalcular ? "Mínimo general " : "Mínimo ") + fmtCompraTienda(minimoAplica) +
     (cumpleMinimo ? " · alcanzado" : " · te faltan " + fmtCompraTienda(faltaMinimo))));
-  const cortePasó = corteTxt && relojEntregaTienda(corteTxt, new Date()).antesDelCorte === false;
+  const cortePasó = corteTxt && relojEntregaTienda(corteTxt, ahoraEntrega).antesDelCorte === false;
   const textoCorte = String(cfg.textoCorte || "").trim();
   // Instagram/Facebook: aceptamos el usuario suelto o el link completo.
   const linkRed = (v, base) => {
@@ -4221,69 +4208,12 @@ function Tienda() {
     clon.ordenCategorias = ord;
     return clon;
   };
-  const abrirAdmin = () => {
-    if (!rutaTienda(window.location.href).admin) return;
-    // Si viene de la vista previa, NO re-sembramos: se conservan los cambios que estaba probando.
-    if (adminOk) {
-      if (!vistaPrevia) setEditCfg(cfgParaEditar());
-      setVistaPrevia(false);
-      setEditorOpen(true);
-      return;
-    }
-    // Si la empresa no se cargó bien, no tiene sentido abrir el login (no se podría validar).
-    if (!empresa || !empresa.codigo) {
-      setAviso("No se pudo identificar la empresa. Revisá que el enlace incluya ?emp=TUCODIGO.");
-      return;
-    }
-    setLoginOpen(true);
-    setLoginErr("");
-  };
-  const hacerLogin = async () => {
-    if (!rutaTienda(window.location.href).admin || loginCargando) return;
-    if (!empresa) {
-      setLoginErr("No se cargó la empresa. Verificá el enlace de acceso.");
-      return;
-    }
-    setLoginCargando(true);
-    setLoginErr("");
-    try {
-      const res = await validarAdmin(empresa.id, loginUid.trim(), loginPass, empresa.codigo);
-      if (res.ok) {
-        if (res.user.token) SB_HDR["x-empresa-token"] = res.user.token;
-        setAdminOk(true);
-        setLoginOpen(false);
-        setLoginPass("");
-        setEditCfg(cfgParaEditar());
-        setEditorOpen(true);
-      } else if (res.motivo === "empresa") {
-        setLoginErr("No se pudo identificar la empresa. Revisá el enlace (debe incluir ?emp=TUCODIGO).");
-      } else if (res.motivo === "red") {
-        setLoginErr("No se pudo conectar con el servidor. Probá de nuevo en un momento.");
-      } else {
-        setLoginErr("Usuario o contraseña incorrectos.");
-      }
-    } catch (e) {
-      setLoginErr("Error inesperado: " + e.message);
-    } finally {
-      setLoginCargando(false);
-    }
-  };
-  const salirEditorPanel = () => {
+  const salirAdmin = () => {
     const sesion = enlaceEditorPanel.current;
     enlaceEditorPanel.current = null;
     setEditorOpen(false);
     setVistaPrevia(false);
     if (sesion) window.parent.postMessage({canal:"tienda-editor-v1",tipo:"cerrar",id:sesion.id},sesion.origen);
-  };
-
-  const salirAdmin = () => {
-    if (enPanelEditor) { salirEditorPanel(); return; }
-    delete SB_HDR["x-empresa-token"];
-    window.history.replaceState(null, "", rutaTienda(window.location.href).publica);
-    setLoginOpen(false);
-    setAdminOk(false);
-    setEditorOpen(false);
-    setVistaPrevia(false);
   };
 
   /* ---- Vista previa: probar los cambios sin guardarlos ---- */
@@ -4517,9 +4447,16 @@ function Tienda() {
       return (p.nombre || "").toLowerCase().includes(q) || String(p.codigo || "").toLowerCase().includes(q);
     }).slice(0, 8);
   }, [busqDest, productosRaw, editCfg.destacados]);
-  const guardarDesdePanel = async () => {
+  const guardar = async () => {
     const sesion=enlaceEditorPanel.current;
     if (!enPanelEditor || !sesion || !empresa || sesion.empresa!==empresa.id || guardando || guardadoEditorPanel.current) return;
+    for (const zona of editCfg.zonasEnvio || []) {
+      const reglas = reglasEntregaTienda(zona);
+      if (!reglas.length) continue;
+      const nombre = String(zona?.nombre || "").trim();
+      const error = errorReglasEntregaTienda(reglas);
+      if (!nombre || error) { alert(nombre ? nombre + " · " + error : "Poné un nombre a la zona antes de guardar sus reglas de entrega."); return; }
+    }
     const solicitud=idMensajeEditorTienda();let timer;
     setGuardando(true);
     try {
@@ -4536,23 +4473,6 @@ function Tienda() {
       alert("❌ No se pudo guardar: " + e.message);
     } finally {
       clearTimeout(timer);guardadoEditorPanel.current=null;
-      setGuardando(false);
-    }
-  };
-  const guardar = async () => {
-    if (enPanelEditor) return guardarDesdePanel();
-    if (!adminOk || !empresa || !rutaTienda(window.location.href).admin || guardando) return;
-    if (!empresa) return;
-    setGuardando(true);
-    try {
-      await guardarConfig(empresa.id, editCfg);
-      setCfgBase(editCfg);
-      salirAdmin();
-      setSlide(0);
-      alert("✅ Cambios guardados");
-    } catch (e) {
-      alert("❌ No se pudo guardar: " + e.message);
-    } finally {
       setGuardando(false);
     }
   };
@@ -5716,7 +5636,9 @@ function Tienda() {
     style: {
       color: TEMA.gold
     }
-  }), /*#__PURE__*/React.createElement("span", null, "Pedidos hasta las ", corteTxt, " entran en el reparto del día.")), cfg.direccionTienda && /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, algunaZonaConReglas
+    ? "Horario de corte: " + corteTxt + ". La entrega se calcula según tu zona."
+    : "Pedidos hasta las " + corteTxt + " entran en el reparto del día.")), cfg.direccionTienda && /*#__PURE__*/React.createElement("div", {
     className: "flex items-start gap-2"
   }, /*#__PURE__*/React.createElement(MapPin, {
     size: 15,
@@ -6642,77 +6564,7 @@ function Tienda() {
     tema: TEMA, cliente: clienteSesion, uid: clienteId, setUid: setClienteId, error: clienteError, cargando: clienteCargando,
     invitacion: !!invitacionCliente?.token, activar: () => comprobarCliente("", true, invitacionCliente?.token, true),
     entrar: () => comprobarCliente(clienteId, true), salir: salirCliente, cerrar: () => setClienteOpen(false)
-  }), loginOpen && /*#__PURE__*/React.createElement("div", {
-    className: "fixed inset-0 z-50 flex items-center justify-center p-4 overflow-hidden",
-    style: {
-      background: `radial-gradient(circle at 50% 35%, #13294b 0%, ${TEMA.bg} 70%)`
-    },
-    onClick: salirAdmin
-  }, /*#__PURE__*/React.createElement(Particulas, {
-    cantidad: 30
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "relative z-10 w-full max-w-xs rounded-2xl p-5",
-    style: {
-      background: TEMA.bgCard,
-      border: `1px solid ${TEMA.borde}`,
-      boxShadow: "0 20px 60px #00000088"
-    },
-    onClick: e => e.stopPropagation()
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-2 mb-1"
-  }, /*#__PURE__*/React.createElement(Settings, {
-    size: 20,
-    style: {
-      color: TEMA.gold
-    }
-  }), /*#__PURE__*/React.createElement("h2", {
-    style: {
-      fontFamily: "var(--f-tit)"
-    },
-    className: "font-extrabold text-lg"
-  }, "Administrar tienda")), /*#__PURE__*/React.createElement("p", {
-    className: "text-xs mb-4",
-    style: {
-      color: TEMA.textoSuave
-    }
-  }, "Ingresá con tu usuario admin de la empresa."), /*#__PURE__*/React.createElement("input", {
-    value: loginUid,
-    onChange: e => setLoginUid(e.target.value),
-    placeholder: "Usuario",
-    className: inputCls + " mb-2",
-    style: inputStyle
-  }), /*#__PURE__*/React.createElement("input", {
-    value: loginPass,
-    onChange: e => setLoginPass(e.target.value),
-    onKeyDown: e => e.key === "Enter" && hacerLogin(),
-    type: "password",
-    placeholder: "Contraseña",
-    className: inputCls,
-    style: inputStyle
-  }), loginErr && /*#__PURE__*/React.createElement("div", {
-    className: "text-xs mt-2",
-    style: {
-      color: TEMA.oferta
-    }
-  }, loginErr), /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2 mt-4"
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: salirAdmin,
-    className: "px-3 py-2.5 rounded-lg text-sm",
-    style: {
-      background: TEMA.bgSoft,
-      color: TEMA.textoSuave
-    }
-  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
-    onClick: hacerLogin,
-    disabled: loginCargando,
-    className: "flex-1 py-2.5 rounded-lg text-sm font-bold",
-    style: {
-      background: TEMA.gold,
-      color: TEMA.bg,
-      opacity: loginCargando ? .6 : 1
-    }
-  }, loginCargando ? "Verificando…" : "Entrar")))), vistaPrevia && !editorOpen && /*#__PURE__*/React.createElement("div", {
+  }), vistaPrevia && !editorOpen && /*#__PURE__*/React.createElement("div", {
     className: "fixed bottom-0 left-0 right-0 z-40 px-3 py-2.5",
     style: {
       background: TEMA.bgCard,
@@ -6790,7 +6642,7 @@ function Tienda() {
     className: "flex items-center gap-2"
   }, /*#__PURE__*/React.createElement("button", {
     onClick: salirAdmin,
-    title: enPanelEditor ? "Cerrar editor" : "Cerrar sesión",
+    title: "Cerrar editor",
     className: "p-2 rounded-lg",
     style: {
       background: TEMA.bgCard,
@@ -7151,7 +7003,7 @@ function Tienda() {
     style: {
       color: TEMA.textoSuave
     }
-  }, /*#__PURE__*/React.createElement("b", null, "Horario de corte:"), " escribilo como ", /*#__PURE__*/React.createElement("b", null, "14:00"), ". Antes de esa hora el cliente ve \"entra en el reparto de hoy\"; después, tu aviso. No bloquea el pedido, solo avisa."))), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("b", null, "Horario de corte:"), " escribilo como ", /*#__PURE__*/React.createElement("b", null, "14:00"), ". Si una zona tiene reglas por día, desde esa hora se usa la regla del día siguiente. No bloquea compras."))), /*#__PURE__*/React.createElement("div", {
     className: "pt-3 mt-1",
     style: {
       borderTop: `1px solid ${TEMA.borde}`
@@ -7294,7 +7146,7 @@ function Tienda() {
     style: {
       color: TEMA.textoSuave
     }
-  }, "Configurá el costo y los días habituales por zona. El cliente puede calcular el envío desde el carrito.", /*#__PURE__*/React.createElement("b", null, " Si no cargás zonas, se usa el \"costo de envío\" de arriba.")), (editCfg.zonasEnvio || []).length === 0 && /*#__PURE__*/React.createElement("div", {
+  }, "Configurá el costo y las fechas de entrega por zona. El cliente ve la estimación en su carrito.", /*#__PURE__*/React.createElement("b", null, " Si no cargás zonas, se usa el \"costo de envío\" de arriba.")), (editCfg.zonasEnvio || []).length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "rounded-lg px-3 py-2 text-[11px]",
     style: {
       background: TEMA.bgCard,
@@ -7381,7 +7233,9 @@ function Tienda() {
           border: "1px solid " + TEMA.borde}}, dia);
     })),
     React.createElement("p", {className: "text-[11px] mt-1", style: {color: TEMA.textoSuave}},
-      "Sin días: «A coordinar». El día actual solo se estima antes del horario de corte."))))))), /*#__PURE__*/React.createElement("div", {
+      reglasEntregaTienda(z).length ? "Estos días quedan guardados y se usan si quitás todas las reglas."
+        : "Sin días: «A coordinar». El día actual solo se estima antes del horario de corte.")),
+  React.createElement(ReglasEntregaEditorTienda, {zona:z, indice:i, onCambio:reglas=>setZona(i,"reglasEntrega",reglas), tema:TEMA, inputCls, inputStyle})))))), /*#__PURE__*/React.createElement("div", {
     className: "pt-3 mt-1",
     style: {
       borderTop: `1px solid ${TEMA.borde}`
@@ -8053,22 +7907,12 @@ function Tienda() {
     style: {
       display: "none"
     },
-    onChange: e => {
+    onChange: async e => {
       const file = e.target.files[0];
       if (!file) return;
-      if (enPanelEditor) {
-        e.target.value = "";
-        comprimirImagen(file,1400,175).then(foto=>setBan(i,"foto",foto))
-          .catch(err=>alert(err.message || "No se pudo preparar la imagen del banner."));
-        return;
-      }
-      const rd = new FileReader();
-      rd.onload = async ev => {
-        const url = await subirImagenTienda(ev.target.result, empresa && empresa.id, "banner");
-        setBan(i, "foto", url);
-      };
-      rd.readAsDataURL(file);
       e.target.value = "";
+      try {setBan(i,"foto",await comprimirImagen(file,1400,175));}
+      catch (e) {alert(e.message || "No se pudo preparar la imagen del banner.");}
     }
   }), b.foto && /*#__PURE__*/React.createElement("button", {
     type: "button",

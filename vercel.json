@@ -20,9 +20,7 @@
       }],
       "missing": [{ "type": "query", "key": "og" }],
       "destination": "/api/og"
-    },
-    { "source": "/admin", "destination": "/index.html" },
-    { "source": "/admin/", "destination": "/index.html" }
+    }
   ]
 }
 
